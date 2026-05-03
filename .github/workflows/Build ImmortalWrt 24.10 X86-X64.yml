@@ -8,8 +8,8 @@ env:
   PROFILE: cudy_wr3000-v1
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  # Включаем sing-box и беспощадно вырезаем USB/звук для экономии места (важно для 16MB Flash)
-  PACKAGES: "sing-box luci-app-sing-box -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl"
+  # Пакеты без кавычек внутри строки для стабильности
+  PACKAGES: sing-box luci-app-sing-box -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl
   DOWNLOAD_URL: https://downloads.immortalwrt.org/releases/24.10.5/targets/mediatek/filogic/immortalwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
   TZ: Europe/Moscow
 
@@ -30,26 +30,30 @@ jobs:
 
     - name: Download and extract Image Builder
       run: |
-        wget -O /tmp/imagebuilder.tar.zst $DOWNLOAD_URL
-        sudo tar -C /tmp -xvf /tmp/imagebuilder.tar.zst
+        # Скачиваем
+        wget -qO /tmp/imagebuilder.tar.zst $DOWNLOAD_URL
+        # Распаковываем через zstd явно
+        zstd -d /tmp/imagebuilder.tar.zst -o /tmp/imagebuilder.tar
+        sudo tar -xvf /tmp/imagebuilder.tar -C /tmp
+        # Чистим временные архивы сразу
+        rm /tmp/imagebuilder.tar /tmp/imagebuilder.tar.zst
 
     - name: Set Image Builder root directory
       run: |
-        # Автоматически находим папку распакованного ImageBuilder
         ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*")
         echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
 
     - name: Compile firmware
       run: |
-        cd $ROOT_DIRECTORY
-        # Собираем образ с нашими пакетами
-        sudo make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
+        cd ${{ env.ROOT_DIRECTORY }}
+        # Сборка. Используем переменную без дополнительных кавычек
+        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}"
         
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        # Собираем результаты в одну папку
         sudo mkdir -p /tmp/bin_firmware
-        sudo find bin/targets/ -type f -name "*.bin" -exec sudo cp {} /tmp/bin_firmware/ \;
-        sudo find bin/targets/ -type f -name "*.manifest" -exec sudo cp {} /tmp/bin_firmware/ \;
+        # Копируем только нужные .bin файлы
+        find bin/targets/ -type f -name "*.bin" -exec cp {} /tmp/bin_firmware/ \;
+        find bin/targets/ -type f -name "*.manifest" -exec cp {} /tmp/bin_firmware/ \;
 
     - name: Organize files
       id: organize
@@ -59,7 +63,7 @@ jobs:
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
         
-    - name: Upload firmware
+    - name: Upload firmware to Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ImmortalWrt-Cudy-WR3000-v1-${{ env.FILE_DATE }}
@@ -70,8 +74,7 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=Cudy-WR3000-v1-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "Custom ImmortalWrt for Cudy WR3000 v1 with Sing-Box (Reality/xhttp)" >> release.txt
+        echo "Custom ImmortalWrt for Cudy WR3000 v1" > release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
