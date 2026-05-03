@@ -44,8 +44,9 @@ jobs:
       run: |
         ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*")
         echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
-
-- name: Compile firmware
+    continue-on-error: 
+    
+    - name: Compile firmware
       run: |
         cd ${{ env.ROOT_DIRECTORY }}
         # Пытаемся собрать. Если упадет по месту - мы увидим это в логе
