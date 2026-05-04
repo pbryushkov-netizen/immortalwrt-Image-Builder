@@ -5,6 +5,10 @@
 SUB_URL=$(uci get vpn.settings.subscription_url 2>/dev/null)
 [ -z "$SUB_URL" ] && exit 0
 
+# Strip URL fragment (#... part is client-side only, not sent to server)
+SUB_URL="${SUB_URL%%#*}"
+[ -z "$SUB_URL" ] && exit 0
+
 logger -t "VPN" "Updating subscription from $SUB_URL"
 
 TMPFILE=$(mktemp)
@@ -17,11 +21,13 @@ fi
 CONTENT=$(cat "$TMPFILE")
 rm -f "$TMPFILE"
 
-# Support: single vless:// key or base64-encoded list
-if echo "$CONTENT" | grep -q "^vless://"; then
-    KEYS="$CONTENT"
+# Support: plain vless:// list, standard base64, or URL-safe base64 (-_ instead of +/)
+if printf '%s' "$CONTENT" | grep -q "vless://"; then
+    KEYS=$(printf '%s' "$CONTENT" | grep "vless://")
 else
-    KEYS=$(echo "$CONTENT" | base64 -d 2>/dev/null | grep "^vless://")
+    # Strip whitespace, convert URL-safe base64 to standard, then decode
+    CLEAN=$(printf '%s' "$CONTENT" | tr -d '\r\n ' | tr -- '-_' '+/')
+    KEYS=$(printf '%s' "$CLEAN" | base64 -d 2>/dev/null | grep "vless://")
 fi
 
 [ -z "$KEYS" ] && logger -t "VPN" "No vless:// keys in subscription" && exit 1

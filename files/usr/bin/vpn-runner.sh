@@ -47,8 +47,14 @@ build_config() {
     [ -z "$server" ] || [ -z "$uuid" ] && return
 
     local FLOW="" TRANS=""
+    # Normalize transport: subscription URIs use 'splithttp', sing-box config uses 'xhttp'
+    case "$transport" in
+        xhttp|splithttp|split-http) transport="xhttp" ;;
+        *) transport="tcp" ;;
+    esac
+
     if [ "$transport" = "xhttp" ]; then
-        TRANS='"transport": {"type": "xhttp", "method": "GET"},'
+        TRANS='"transport": {"type": "xhttp", "path": "/"},'
     else
         FLOW='"flow": "xtls-rprx-vision",'
     fi
@@ -131,6 +137,14 @@ if [ ! -x "$SBOX" ]; then
     exit 1
 fi
 
+# Sanity-check: version must be readable (catches truncated downloads)
+if ! "$SBOX" version >/dev/null 2>&1; then
+    log "Binary corrupt, re-downloading..."
+    rm -f "$SBOX"
+    dl "$SBOX" "$SBOX_URL"
+    chmod +x "$SBOX" 2>/dev/null
+fi
+
 # Download GeoIP databases to RAM (not Flash)
 ATTEMPT=0
 while [ $ATTEMPT -lt 5 ]; do
@@ -156,4 +170,12 @@ if [ "$FOUND" = "0" ]; then
 fi
 
 log "Starting sing-box tunnel..."
+# Validate config: if binary missing required transport, force fresh download
+CHECK=$("$SBOX" check -c /tmp/sing-box.json 2>&1)
+if echo "$CHECK" | grep -q "unknown.*type"; then
+    log "Binary missing required features ($(echo "$CHECK" | grep -o 'unknown.*type[^:]*')), forcing re-download..."
+    rm -f "$SBOX"
+    dl "$SBOX" "$SBOX_URL"
+    chmod +x "$SBOX" 2>/dev/null
+fi
 exec "$SBOX" run -c /tmp/sing-box.json
