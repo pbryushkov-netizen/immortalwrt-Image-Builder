@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for Cudy WR3000 v1 (Shadowsocks Edition)
+name: Build OpenWrt for Cudy WR3000 v1
 on:
   push:
     branches: [ "master" ]
@@ -8,10 +8,10 @@ env:
   PROFILE: cudy_wr3000-v1
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  # Легковесные клиенты на C + графический интерфейс LuCI
-  PACKAGES: "luci-app-shadowsocks-libev shadowsocks-libev-ss-local shadowsocks-libev-ss-redir xray-plugin -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -luci-i18n-base-zh-cn -default-settings-chn -ipv6helper -odhcpd-ipv6only -odhcp6c -luci-proto-ipv6 -coremark -htop -tcpdump -iperf3 -luci-app-ttyd -luci-app-filetransfer -luci-app-autoreboot -luci-app-turboacc -luci-app-upnp -luci-app-ddns -luci-app-vlmcsd"
-
-  DOWNLOAD_URL: https://downloads.immortalwrt.org/releases/24.10.5/targets/mediatek/filogic/immortalwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
+  # В чистом OpenWrt нам не нужно вырезать десятки пакетов. 
+  # Добавляем VPN-клиенты и удаляем только драйверы USB для экономии места.
+  PACKAGES: "luci-app-shadowsocks-libev shadowsocks-libev-ss-local shadowsocks-libev-ss-redir xray-plugin -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3"
+  DOWNLOAD_URL: https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-imagebuilder-23.05.5-mediatek-filogic.Linux-x86_64.tar.xz
   TZ: Europe/Moscow
 
 jobs:
@@ -27,18 +27,17 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd
+        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3
 
     - name: Download and extract Image Builder
       run: |
-        wget -qO /tmp/imagebuilder.tar.zst $DOWNLOAD_URL
-        zstd -d /tmp/imagebuilder.tar.zst -o /tmp/imagebuilder.tar
-        sudo tar -xf /tmp/imagebuilder.tar -C /tmp
-        rm /tmp/imagebuilder.tar /tmp/imagebuilder.tar.zst
+        wget -qO /tmp/imagebuilder.tar.xz $DOWNLOAD_URL
+        sudo tar -xf /tmp/imagebuilder.tar.xz -C /tmp
+        rm /tmp/imagebuilder.tar.xz
 
     - name: Set Image Builder root directory
       run: |
-        ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*")
+        ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "openwrt-imagebuilder-*")
         echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
 
     - name: Compile firmware
@@ -61,7 +60,7 @@ jobs:
     - name: Upload firmware to Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ImmortalWrt-Cudy-WR3000-v1-${{ env.FILE_DATE }}
+        name: OpenWrt-Cudy-WR3000-v1-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: Generate release tag
@@ -69,7 +68,7 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=Cudy-WR3000-v1-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "Custom ImmortalWrt with Shadowsocks-libev and Xray-plugin" > release.txt
+        echo "Official OpenWrt with Shadowsocks-libev and Xray-plugin" > release.txt
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
