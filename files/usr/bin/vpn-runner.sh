@@ -68,29 +68,20 @@ build_config() {
         FLOW='"flow":"xtls-rprx-vision",'
     fi
 
-    # Generate sing-box config (v1.13.x format)
-    # Routing: Russian TLD domains → direct, private IPs → direct, rest → VLESS
+    # Generate sing-box config (v1.13.x format — no legacy dns section)
+    # Routing via TLS SNI sniffing: .ru/.su/.xn--p1ai → direct, rest → VLESS
     cat > /tmp/sing-box.json << JSON
 {
   "log": {"level": "warn"},
-  "dns": {
-    "servers": [
-      {"tag": "remote", "address": "https://1.1.1.1/dns-query", "detour": "vless-out"},
-      {"tag": "local",  "address": "223.5.5.5", "detour": "direct"}
-    ],
-    "rules": [
-      {"domain_suffix": [".ru", ".su", ".xn--p1ai"], "server": "local"}
-    ],
-    "final": "remote",
-    "independent_cache": true
-  },
   "inbounds": [{
     "type": "tun",
     "tag": "tun-in",
     "interface_name": "tun0",
     "address": "172.19.0.1/30",
     "auto_route": true,
-    "strict_route": false
+    "strict_route": false,
+    "sniff": true,
+    "sniff_override_destination": false
   }],
   "outbounds": [
     {
@@ -113,7 +104,6 @@ build_config() {
   ],
   "route": {
     "rules": [
-      {"protocol": "dns", "action": "hijack-dns"},
       {"domain_suffix": [".ru", ".su", ".xn--p1ai"], "outbound": "direct"},
       {"ip_is_private": true, "outbound": "direct"}
     ],
@@ -130,7 +120,8 @@ JSON
 wait_net || exit 1
 
 # Download sing-box binary if missing or suspiciously small (HTML 404 guard)
-SBOX_SZ=$(wc -c < "$SBOX" 2>/dev/null || echo 0)
+SBOX_SZ=0
+[ -f "$SBOX" ] && SBOX_SZ=$(wc -c < "$SBOX" 2>/dev/null || echo 0)
 if [ ! -x "$SBOX" ] || [ "$SBOX_SZ" -lt "$SBOX_MIN_SIZE" ]; then
     log "Downloading sing-box binary to RAM..."
     if ! dl "$SBOX" "$SBOX_URL" "$SBOX_MIN_SIZE"; then

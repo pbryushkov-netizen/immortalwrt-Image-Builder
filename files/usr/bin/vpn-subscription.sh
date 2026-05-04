@@ -43,22 +43,37 @@ if [ $? -ne 0 ] || [ "$HTTP_CODE" != "200" ]; then
 fi
 
 CONTENT=$(cat "$TMPFILE")
+CONTENT_LEN=$(wc -c < "$TMPFILE" 2>/dev/null || echo 0)
 rm -f "$TMPFILE"
+
+logger -t "VPN" "Subscription response: ${CONTENT_LEN} bytes"
 
 # Detect format and extract vless:// keys
 if printf '%s' "$CONTENT" | grep -q "vless://"; then
-    # Plain list (one key per line or space/comma separated)
-    KEYS=$(printf '%s' "$CONTENT" | grep -o 'vless://[^[:space:]]*')
+    # Plain list
+    KEYS=$(printf '%s' "$CONTENT" | grep -o 'vless://[^[:space:]"]*')
+    logger -t "VPN" "Subscription format: plain vless://"
 else
-    # Try base64 decode (convert URL-safe chars first)
-    CLEAN=$(printf '%s' "$CONTENT" | tr -d '\r\n ' | tr -- '-_' '+/')
-    KEYS=$(printf '%s' "$CLEAN" | base64 -d 2>/dev/null | grep -o 'vless://[^[:space:]]*')
+    # Try standard base64 and URL-safe base64
+    CLEAN=$(printf '%s' "$CONTENT" | tr -d '\r\n \t')
+    # Add padding if needed
+    PAD=$(( ${#CLEAN} % 4 ))
+    [ "$PAD" -eq 2 ] && CLEAN="${CLEAN}=="
+    [ "$PAD" -eq 3 ] && CLEAN="${CLEAN}="
+    # Try standard first, then URL-safe
+    DECODED=$(printf '%s' "$CLEAN" | base64 -d 2>/dev/null)
+    [ -z "$DECODED" ] && DECODED=$(printf '%s' "$CLEAN" | tr -- '-_' '+/' | base64 -d 2>/dev/null)
+    if printf '%s' "$DECODED" | grep -q "vless://"; then
+        KEYS=$(printf '%s' "$DECODED" | grep -o 'vless://[^[:space:]"]*')
+        logger -t "VPN" "Subscription format: base64-encoded"
+    else
+        # Log first 80 chars to help diagnose unknown format
+        PREVIEW=$(printf '%s' "$CONTENT" | head -c 80 | tr -d '\000-\037')
+        logger -t "VPN" "Subscription unknown format, preview: $PREVIEW"
+    fi
 fi
 
-if [ -z "$KEYS" ]; then
-    logger -t "VPN" "No vless:// keys found in subscription response"
-    exit 1
-fi
+[ -z "$KEYS" ] && exit 1
 
 # Remove previously imported subscription servers (keep manually added 'main')
 for SEC in $(uci show vpn | grep "=server" | cut -d. -f2 | cut -d= -f1); do
