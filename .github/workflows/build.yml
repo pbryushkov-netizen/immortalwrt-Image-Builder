@@ -109,16 +109,18 @@ jobs:
         run: |
           cd builder
 
-          # Добавляем только то, чего нет в базовом профиле cudy_wr3000-v1:
-          #   luci + тема — веб-интерфейс
-          #   kmod-tun   — TUN устройство для sing-box
-          #   ip-full    — политическая маршрутизация (ip rule / ip route table)
-          #   curl + ca-bundle — загрузка sing-box и GeoIP
-          # Убираем балласт (IPv6, USB, PPP, ненужные luci-app): экономим ~2-3 МБ
+          # Роутер используется как прокси-сервер между провайдером и mesh-сетью.
+          # WiFi полностью отключён — экономим ~4 МБ Flash.
           PACKAGES="
             luci luci-theme-bootstrap
             kmod-tun ip-full
             curl ca-bundle
+            -wpad-basic-mbedtls -wpad-mini -hostapd -hostapd-common
+            -kmod-mt7915e -kmod-mt7921e -kmod-mt7921u
+            -kmod-mt76-core -kmod-mt76-connac-lib -kmod-mt76x2-common
+            -mt7981-wo-firmware
+            -iwinfo -iw -wireless-tools
+            -luci-app-wireless -luci-proto-wifi
             -odhcp6c -odhcpd-ipv6only
             -kmod-ipv6 -kmod-ip6tables -ip6tables
             -luci-proto-ipv6 -luci-proto-ppp
