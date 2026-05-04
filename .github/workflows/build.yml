@@ -14,6 +14,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
 
       # ── 1. Исходники репозитория ──────────────────────────────────────────
@@ -26,6 +28,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: false
 
       - name: Build minimal sing-box (arm64)
         run: |
@@ -50,10 +53,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete vpn-core --cleanup-tag -y 2>/dev/null || true
+          # Удаляем старый релиз и тег (по отдельности — надёжнее)
+          gh release delete vpn-core -y 2>/dev/null || true
+          git push origin :refs/tags/vpn-core 2>/dev/null || true
+          sleep 3
           gh release create vpn-core sing-box \
             --title "VPN Core (ARM64 sing-box v1.10.7)" \
-            --notes "Автоматическая сборка. Скачивается роутером в /tmp при старте."
+            --notes "Автоматическая сборка. Скачивается роутером в /tmp при старте." \
+            --latest=false
 
       # ── 4. Скачиваем OpenWrt 24.10.6 Image Builder ───────────────────────
       - name: Download OpenWrt 24.10.6 Image Builder
