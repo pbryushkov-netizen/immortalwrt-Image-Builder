@@ -1,44 +1,42 @@
 #!/bin/sh
-# VPN runner: downloads GeoIP to RAM, builds sing-box config, starts tunnel.
-# sing-box binary is downloaded to /tmp on first start (too large for 16MB Flash).
-# GeoIP databases (~2-3 MB) are downloaded to RAM on every start.
+# VPN runner — downloads sing-box to RAM on first start, builds config, starts tunnel.
+# sing-box (~10 MB) cannot fit in 16 MB Flash — we keep it in /tmp (256 MB RAM).
+# Routing: .ru/.su/.xn--p1ai domains → direct, everything else → VLESS tunnel.
+# If VPN fails: strict_route=false → traffic falls through to direct (no breakage).
 
 REPO="GITHUB_REPO_PLACEHOLDER"
 SBOX=/tmp/sing-box
 SBOX_URL="https://github.com/${REPO}/releases/download/vpn-core/sing-box"
-# Official sing-box geo repos — guaranteed to have geoip-ru.srs / geosite-ru.srs
-GEOIP_URL="https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs"
-GEOSITE_URL="https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs"
+SBOX_MIN_SIZE=5000000   # 5 MB — guards against downloading an HTML 404 page
 
 log() { logger -t "VPN" "$1"; }
 
+# Download with 3-mirror fallback and minimum-size check
 dl() {
-    local FILE=$1 URL=$2
-    log "Downloading $FILE..."
-    # 1 attempt per mirror, --max-time prevents infinite stall on slow connection
-    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" "$URL" \
-        && [ -s "$FILE" ] && return 0
-    rm -f "$FILE"
-    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" \
-        "https://mirror.ghproxy.com/$URL" \
-        && [ -s "$FILE" ] && return 0
-    rm -f "$FILE"
-    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" \
-        "https://ghp.ci/$URL" \
-        && [ -s "$FILE" ] && return 0
+    local FILE=$1 URL=$2 MIN=${3:-1}
+    for MIRROR in "" "https://mirror.ghproxy.com/" "https://ghp.ci/"; do
+        log "Downloading ${FILE##*/}..."
+        rm -f "$FILE"
+        curl -sfL --connect-timeout 20 --max-time 180 \
+            -o "$FILE" "${MIRROR}${URL}" 2>/dev/null
+        local SZ
+        SZ=$(wc -c < "$FILE" 2>/dev/null || echo 0)
+        [ "$SZ" -ge "$MIN" ] && return 0
+    done
     rm -f "$FILE"
     return 1
 }
 
 wait_net() {
-    local TRIES=0
     log "Waiting for internet..."
-    while ! ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && ! ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; do
-        TRIES=$((TRIES+1))
-        [ "$TRIES" -ge 40 ] && log "No internet after 120s" && return 1
+    local N=0
+    while ! ping -c1 -W3 8.8.8.8 >/dev/null 2>&1 \
+       && ! ping -c1 -W3 1.1.1.1 >/dev/null 2>&1; do
+        N=$((N+1))
+        [ "$N" -ge 40 ] && log "No internet after 120s" && return 1
         sleep 3
     done
-    return 0
+    log "Internet OK"
 }
 
 build_config() {
@@ -47,35 +45,31 @@ build_config() {
     [ "$active" != "1" ] && return
 
     local server port uuid transport sni pbk sid
-    config_get server    "$sec" server
-    config_get port      "$sec" port 443
-    config_get uuid      "$sec" uuid
+    config_get server    "$sec" server    ""
+    config_get port      "$sec" port     443
+    config_get uuid      "$sec" uuid     ""
     config_get transport "$sec" transport xhttp
-    config_get sni       "$sec" sni
-    config_get pbk       "$sec" pbk
-    config_get sid       "$sec" sid
+    config_get sni       "$sec" sni      ""
+    config_get pbk       "$sec" pbk      ""
+    config_get sid       "$sec" sid      ""
 
     [ -z "$server" ] || [ -z "$uuid" ] && return
 
-    local FLOW="" TRANS=""
-    # Normalize transport: subscription URIs use 'splithttp', sing-box config uses 'xhttp'
+    # Normalize: subscription URIs often use 'splithttp', sing-box 1.13+ uses 'xhttp'
     case "$transport" in
         xhttp|splithttp|split-http) transport="xhttp" ;;
         *) transport="tcp" ;;
     esac
 
+    local FLOW="" TRANS=""
     if [ "$transport" = "xhttp" ]; then
-        TRANS='"transport": {"type": "xhttp", "path": "/"},'
+        TRANS='"transport":{"type":"xhttp","path":"/"},'
     else
-        FLOW='"flow": "xtls-rprx-vision",'
+        FLOW='"flow":"xtls-rprx-vision",'
     fi
 
-    local GEO_RULES="" GEO_SETS=""
-    if [ -s /tmp/geo/geoip-ru.srs ] && [ -s /tmp/geo/geosite-ru.srs ]; then
-        GEO_SETS='"rule_set": [{"tag": "geoip-ru","type": "local","format": "binary","path": "/tmp/geo/geoip-ru.srs"},{"tag": "geosite-ru","type": "local","format": "binary","path": "/tmp/geo/geosite-ru.srs"}],'
-        GEO_RULES='{"rule_set": ["geoip-ru", "geosite-ru"], "outbound": "direct"},'
-    fi
-
+    # Generate sing-box config (v1.13.x format)
+    # Routing: Russian TLD domains → direct, private IPs → direct, rest → VLESS
     cat > /tmp/sing-box.json << JSON
 {
   "log": {"level": "warn"},
@@ -85,25 +79,28 @@ build_config() {
       {"tag": "local",  "address": "223.5.5.5", "detour": "direct"}
     ],
     "rules": [
-      {"rule_set": ["geosite-ru"], "server": "local"},
       {"domain_suffix": [".ru", ".su", ".xn--p1ai"], "server": "local"}
     ],
     "final": "remote",
     "independent_cache": true
   },
   "inbounds": [{
-    "type": "tun", "tag": "tun-in",
+    "type": "tun",
+    "tag": "tun-in",
     "interface_name": "tun0",
-    "inet4_address": "172.19.0.1/30",
+    "address": "172.19.0.1/30",
     "auto_route": true,
-    "strict_route": false,
-    "sniff": true
+    "strict_route": false
   }],
   "outbounds": [
     {
-      "type": "vless", "tag": "vless-out",
-      "server": "$server", "server_port": $port, "uuid": "$uuid",
-      $FLOW $TRANS
+      "type": "vless",
+      "tag": "vless-out",
+      "server": "$server",
+      "server_port": $port,
+      "uuid": "$uuid",
+      $FLOW
+      $TRANS
       "tls": {
         "enabled": true,
         "server_name": "$sni",
@@ -115,10 +112,8 @@ build_config() {
     {"type": "direct", "tag": "direct"}
   ],
   "route": {
-    $GEO_SETS
     "rules": [
       {"protocol": "dns", "action": "hijack-dns"},
-      $GEO_RULES
       {"domain_suffix": [".ru", ".su", ".xn--p1ai"], "outbound": "direct"},
       {"ip_is_private": true, "outbound": "direct"}
     ],
@@ -132,44 +127,30 @@ JSON
 
 # ── MAIN ────────────────────────────────────────────────────────────────────
 
-mkdir -p /tmp/geo
-
 wait_net || exit 1
-log "Internet OK"
 
-# Download sing-box binary to RAM if not present
-if [ ! -x "$SBOX" ]; then
+# Download sing-box binary if missing or suspiciously small (HTML 404 guard)
+SBOX_SZ=$(wc -c < "$SBOX" 2>/dev/null || echo 0)
+if [ ! -x "$SBOX" ] || [ "$SBOX_SZ" -lt "$SBOX_MIN_SIZE" ]; then
     log "Downloading sing-box binary to RAM..."
-    dl "$SBOX" "$SBOX_URL"
-    chmod +x "$SBOX" 2>/dev/null
-fi
-if [ ! -x "$SBOX" ]; then
-    log "ERROR: Failed to download sing-box binary"
-    exit 1
+    if ! dl "$SBOX" "$SBOX_URL" "$SBOX_MIN_SIZE"; then
+        log "ERROR: Failed to download sing-box binary (all mirrors failed)"
+        exit 1
+    fi
+    chmod +x "$SBOX"
 fi
 
-# Sanity-check: version must be readable (catches truncated downloads)
+# Verify binary is actually executable (catches wrong-arch or corrupt downloads)
 if ! "$SBOX" version >/dev/null 2>&1; then
-    log "Binary corrupt, re-downloading..."
+    log "Binary corrupt/wrong arch — re-downloading..."
     rm -f "$SBOX"
-    dl "$SBOX" "$SBOX_URL"
-    chmod +x "$SBOX" 2>/dev/null
+    dl "$SBOX" "$SBOX_URL" "$SBOX_MIN_SIZE" && chmod +x "$SBOX" || {
+        log "ERROR: Re-download also failed"
+        exit 1
+    }
 fi
 
-# Download GeoIP databases to RAM (not Flash)
-ATTEMPT=0
-while [ $ATTEMPT -lt 5 ]; do
-    ATTEMPT=$((ATTEMPT+1))
-    [ -s /tmp/geo/geoip-ru.srs ]   || dl "/tmp/geo/geoip-ru.srs"   "$GEOIP_URL"
-    [ -s /tmp/geo/geosite-ru.srs ] || dl "/tmp/geo/geosite-ru.srs" "$GEOSITE_URL"
-    [ -s /tmp/geo/geoip-ru.srs ] && [ -s /tmp/geo/geosite-ru.srs ] && break
-    log "GeoIP attempt $ATTEMPT/5 failed, retry in 15s..."
-    rm -f /tmp/geo/geoip-ru.srs /tmp/geo/geosite-ru.srs
-    sleep 15
-done
-[ ! -s /tmp/geo/geoip-ru.srs ] && log "GeoIP unavailable — domain-only routing"
-
-# Find active server and build config
+# Build sing-box config from UCI active server
 . /lib/functions.sh
 config_load vpn
 FOUND=0
@@ -180,13 +161,11 @@ if [ "$FOUND" = "0" ]; then
     exit 0
 fi
 
-log "Starting sing-box tunnel..."
-# Validate config: if binary missing required transport, force fresh download
-CHECK=$("$SBOX" check -c /tmp/sing-box.json 2>&1)
-if echo "$CHECK" | grep -q "unknown.*type"; then
-    log "Binary missing required features ($(echo "$CHECK" | grep -o 'unknown.*type[^:]*')), forcing re-download..."
-    rm -f "$SBOX"
-    dl "$SBOX" "$SBOX_URL"
-    chmod +x "$SBOX" 2>/dev/null
+# Validate generated config before launching
+if ! "$SBOX" check -c /tmp/sing-box.json >/dev/null 2>&1; then
+    log "Config validation failed: $("$SBOX" check -c /tmp/sing-box.json 2>&1 | head -1)"
+    exit 1
 fi
+
+log "Starting sing-box tunnel..."
 exec "$SBOX" run -c /tmp/sing-box.json

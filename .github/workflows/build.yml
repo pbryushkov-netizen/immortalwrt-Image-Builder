@@ -36,13 +36,13 @@ jobs:
           sudo apt-get install -y zstd git
 
           # Клонируем в sb-src чтобы имя директории не конфликтовало с бинарником sing-box
-          git clone --depth=1 --branch v1.10.7 \
+          git clone --depth=1 --branch v1.13.11 \
             https://github.com/SagerNet/sing-box.git sb-src
           cd sb-src
 
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
           go build -trimpath \
-            -ldflags "-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.10.7" \
+            -ldflags "-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.13.11" \
             -tags "with_vless,with_utls,with_reality,with_xhttp" \
             -o ../sing-box ./cmd/sing-box
           cd ..
