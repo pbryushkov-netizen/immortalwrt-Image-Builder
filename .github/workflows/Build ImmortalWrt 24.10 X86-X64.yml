@@ -75,7 +75,6 @@ jobs:
           chmod +x builder/files/etc/uci-defaults/99-enable-geo-ram
 
           # === ПЕРЕХВАТЧИК MKSQUASHFS ===
-          # Этот блок решает проблему жестких зависимостей
           MKSQ_PATH=$(find builder -name mksquashfs4 | head -n 1)
           mv "$MKSQ_PATH" "${MKSQ_PATH}_real"
           
@@ -83,18 +82,21 @@ jobs:
           #!/bin/bash
           TARGET_DIR=$1
           
-          echo "=== ПРИНУДИТЕЛЬНОЕ УДАЛЕНИЕ ЖЕСТКИХ ЗАВИСИМОСТЕЙ ==="
+          echo "=== ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ==="
           rm -rf "$TARGET_DIR"/usr/share/v2ray/* 2>/dev/null
           rm -rf "$TARGET_DIR"/usr/share/sing-box/* 2>/dev/null
           rm -rf "$TARGET_DIR"/usr/share/xray/* 2>/dev/null
           rm -rf "$TARGET_DIR"/etc/homeproxy/resources/* 2>/dev/null
           
-          # Создание пустых файлов для корректной инициализации Homeproxy
+          # УДАЛЕНИЕ БАЗЫ OPKG (Экономия ~1.5 МБ)
+          rm -rf "$TARGET_DIR"/usr/lib/opkg/info/* 2>/dev/null
+          rm -rf "$TARGET_DIR"/usr/lib/opkg/lists/* 2>/dev/null
+          rm -f "$TARGET_DIR"/usr/bin/opkg 2>/dev/null
+          
           mkdir -p "$TARGET_DIR"/usr/share/sing-box
           touch "$TARGET_DIR"/usr/share/sing-box/geoip.srs
           touch "$TARGET_DIR"/usr/share/sing-box/geosite.srs
           
-          # Запуск оригинального упаковщика
           exec "${0}_real" "$@"
           EOF
           chmod +x "$MKSQ_PATH"
