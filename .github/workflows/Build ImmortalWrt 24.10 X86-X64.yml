@@ -20,13 +20,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl zstd
           
-          # Добавлен флаг --recursive для скачивания всех сабмодулей
+          # Принудительно меняем протокол с SSH на HTTPS для сабмодулей
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          
+          # Скачиваем форк от Hiddify со всеми зависимостями
           git clone --recursive https://github.com/hiddify/hiddify-sing-box.git sing-box
           cd sing-box
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=arm64
-          # Добавлен тег with_xhttp
           go build -v -trimpath -ldflags "-s -w -buildid=" \
             -tags "with_vless,with_utls,with_reality,with_xhttp" \
             -o ../sing-box-custom ./cmd/sing-box
