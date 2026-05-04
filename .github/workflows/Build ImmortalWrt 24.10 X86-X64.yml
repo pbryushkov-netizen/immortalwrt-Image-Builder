@@ -20,14 +20,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl zstd
           
-          # 1. Скачиваем форк от Hiddify с нативной поддержкой XHTTP
-          git clone https://github.com/hiddify/hiddify-sing-box.git sing-box
+          # Добавлен флаг --recursive для скачивания всех сабмодулей
+          git clone --recursive https://github.com/hiddify/hiddify-sing-box.git sing-box
           cd sing-box
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=arm64
+          # Добавлен тег with_xhttp
           go build -v -trimpath -ldflags "-s -w -buildid=" \
-            -tags "with_vless,with_utls,with_reality" \
+            -tags "with_vless,with_utls,with_reality,with_xhttp" \
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
           
@@ -56,7 +57,6 @@ jobs:
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
-          # Файл конфигурации интерфейса
           cat << 'EOF' > builder/files/etc/config/vless
           config server 'main'
               option enabled '0'
@@ -69,7 +69,6 @@ jobs:
               option sid ''
           EOF
 
-          # Интеграция в меню веб-интерфейса LuCI
           cat << 'EOF' > builder/files/usr/lib/lua/luci/controller/vless.lua
           module("luci.controller.vless", package.seeall)
           function index()
@@ -78,11 +77,9 @@ jobs:
           end
           EOF
 
-          # Визуальная форма ввода ключей с выбором транспорта
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
           m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент Sing-Box. Базы маршрутизации загружаются в RAM автоматически.")
           
-          -- Принудительный перезапуск демона при сохранении настроек
           m.on_after_commit = function(self)
               os.execute("/etc/init.d/vless restart >/dev/null 2>&1 &")
           end
@@ -105,7 +102,6 @@ jobs:
           return m
           EOF
 
-          # Системный демон маршрутизации и автозапуска
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -128,7 +124,6 @@ jobs:
               [ -f /tmp/geo/geoip-ru.srs ] || wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
               [ -f /tmp/geo/geosite-ru.srs ] || wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
 
-              # Исключение конфликта транспортов и Vision
               if [ "$transport" = "xhttp" ]; then
                   FLOW_BLOCK=''
                   TRANS_BLOCK='"transport": {"type": "xhttp"},'
