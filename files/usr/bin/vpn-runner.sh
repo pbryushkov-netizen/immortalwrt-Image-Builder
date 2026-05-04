@@ -6,17 +6,28 @@
 REPO="GITHUB_REPO_PLACEHOLDER"
 SBOX=/tmp/sing-box
 SBOX_URL="https://github.com/${REPO}/releases/download/vpn-core/sing-box"
-GEOIP_URL="https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geoip.srs"
-GEOSITE_URL="https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geosite.srs"
+# Official sing-box geo repos — guaranteed to have geoip-ru.srs / geosite-ru.srs
+GEOIP_URL="https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs"
+GEOSITE_URL="https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs"
 
 log() { logger -t "VPN" "$1"; }
 
 dl() {
     local FILE=$1 URL=$2
     log "Downloading $FILE..."
-    curl -sfL -4 --connect-timeout 20 --retry 3 --retry-delay 5 -o "$FILE" "$URL" && return 0
-    curl -sfL -4 --connect-timeout 20 --retry 2 -o "$FILE" "https://mirror.ghproxy.com/$URL" && return 0
-    curl -sfL -4 --connect-timeout 15 --retry 2 -o "$FILE" "https://ghp.ci/$URL"
+    # 1 attempt per mirror, --max-time prevents infinite stall on slow connection
+    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" "$URL" \
+        && [ -s "$FILE" ] && return 0
+    rm -f "$FILE"
+    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" \
+        "https://mirror.ghproxy.com/$URL" \
+        && [ -s "$FILE" ] && return 0
+    rm -f "$FILE"
+    curl -sfL --connect-timeout 15 --max-time 90 -o "$FILE" \
+        "https://ghp.ci/$URL" \
+        && [ -s "$FILE" ] && return 0
+    rm -f "$FILE"
+    return 1
 }
 
 wait_net() {
