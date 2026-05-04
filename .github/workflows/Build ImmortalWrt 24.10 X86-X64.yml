@@ -21,7 +21,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl
           
-          # Клонирование и сборка Sing-box
+          # Клонирование и сборка Sing-box с минимальными тегами
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
           export CGO_ENABLED=0
@@ -32,14 +32,8 @@ jobs:
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
           
-          echo "Размер бинарника ДО сжатия:"
-          ls -lh sing-box-custom
-          
-          # Экстремальное сжатие бинарного файла
+          # Сжатие бинарника (экономит ~8 МБ во Flash)
           upx --best --lzma sing-box-custom
-          
-          echo "Размер бинарника ПОСЛЕ сжатия UPX:"
-          ls -lh sing-box-custom
 
       - name: Setup ImmortalWrt ImageBuilder (MT7981)
         run: |
@@ -50,7 +44,7 @@ jobs:
       - name: Patch SquashFS compression in .config
         run: |
           cd builder
-          # Увеличение размера блока для максимального сжатия файловой системы
+          # Установка размера блока 1024K для максимальной плотности SquashFS
           sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
           sed -i 's/CONFIG_TARGET_IMAGES_GZIP=y/# CONFIG_TARGET_IMAGES_GZIP is not set/g' .config
 
@@ -60,11 +54,11 @@ jobs:
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
           
-          # Интеграция сжатого ядра
+          # Копируем сжатый бинарник
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
-          # Скрипт загрузки баз маршрутизации в RAM
+          # Скрипт для загрузки баз в RAM (освобождает Flash-память)
           cat << 'EOF' > builder/files/etc/init.d/geo-ram-loader
           #!/bin/sh /etc/rc.common
           START=99
@@ -73,13 +67,12 @@ jobs:
             logger -t "GeoRAM" "Downloading RU routing rules to RAM..."
             wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
             wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
-            logger -t "GeoRAM" "Geo rules updated. Restarting VPN daemon..."
             /etc/init.d/homeproxy restart
           }
           EOF
           chmod +x builder/files/etc/init.d/geo-ram-loader
 
-          # Активация скрипта
+          # Автозапуск скрипта при загрузке
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-geo-ram
           #!/bin/sh
           /etc/init.d/geo-ram-loader enable
@@ -88,11 +81,14 @@ jobs:
           EOF
           chmod +x builder/files/etc/uci-defaults/99-enable-geo-ram
 
-      - name: Build Firmware with aggressive package reduction
+      - name: Build Firmware with extreme package reduction
         run: |
           cd builder
-          EXCLUDE_PKGS="-luci-theme-argon -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -wpad-basic-mbedtls -kmod-sound-core -kmod-usb-dwc3"
-          INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-openssl curl"
+          # Исключаем: USB, IPv6, PPP, статические Geo-базы, тяжелый OpenSSL и китайскую локализацию
+          EXCLUDE_PKGS="-luci-theme-argon -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -kmod-sound-core -kmod-usb-dwc3 -wpad-openssl -wpad-basic-openssl -sing-box-geoip -sing-box-geosite -v2ray-geoip -v2ray-geosite -luci-i18n-base-zh-cn -luci-i18n-homeproxy-zh-cn"
+          
+          # Включаем: GUI, минимальную тему и легкий mbedTLS для Wi-Fi
+          INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-basic-mbedtls"
           
           make image PROFILE="cudy_wr3000-v1" PACKAGES="$INCLUDE_PKGS $EXCLUDE_PKGS" FILES="files"
 
