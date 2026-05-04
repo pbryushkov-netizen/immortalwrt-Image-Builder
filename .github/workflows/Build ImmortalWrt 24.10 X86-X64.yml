@@ -1,4 +1,4 @@
-name: Build Custom OpenWrt 24.10.5 with Micro VLESS GUI
+name: Build Custom OpenWrt 24.10.6 with Micro VLESS GUI
 
 on:
   workflow_dispatch:
@@ -20,21 +20,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl zstd
           
-          git clone https://github.com/SagerNet/sing-box.git
+          # 1. Скачиваем форк от Hiddify с нативной поддержкой XHTTP
+          git clone https://github.com/hiddify/hiddify-sing-box.git sing-box
           cd sing-box
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=arm64
           go build -v -trimpath -ldflags "-s -w -buildid=" \
-            -tags "with_vless,with_utls,with_reality,with_xhttp" \
+            -tags "with_vless,with_utls,with_reality" \
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
           
           upx --best --lzma sing-box-custom
 
-      - name: Setup Vanilla OpenWrt 24.10.5 ImageBuilder
+      - name: Setup Vanilla OpenWrt 24.10.6 ImageBuilder
         run: |
-          wget https://downloads.openwrt.org/releases/24.10.5/targets/mediatek/filogic/openwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
+          wget https://downloads.openwrt.org/releases/24.10.6/targets/mediatek/filogic/openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst
           tar -xf openwrt-imagebuilder-*.tar.zst
           mv openwrt-imagebuilder-*/ builder
 
@@ -55,19 +56,20 @@ jobs:
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
-          # 1. Файл конфигурации интерфейса
+          # Файл конфигурации интерфейса
           cat << 'EOF' > builder/files/etc/config/vless
           config server 'main'
               option enabled '0'
               option server ''
               option port '443'
               option uuid ''
+              option transport 'tcp'
               option sni ''
               option pbk ''
               option sid ''
           EOF
 
-          # 2. Интеграция в меню веб-интерфейса LuCI
+          # Интеграция в меню веб-интерфейса LuCI
           cat << 'EOF' > builder/files/usr/lib/lua/luci/controller/vless.lua
           module("luci.controller.vless", package.seeall)
           function index()
@@ -76,22 +78,34 @@ jobs:
           end
           EOF
 
-          # 3. Визуальная форма ввода ключей
+          # Визуальная форма ввода ключей с выбором транспорта
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
-          m = Map("vless", "VLESS+xhttp Reality", "Ультра-компактный клиент Sing-Box. Базы маршрутизации загружаются в RAM автоматически.")
+          m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент Sing-Box. Базы маршрутизации загружаются в RAM автоматически.")
+          
+          -- Принудительный перезапуск демона при сохранении настроек
+          m.on_after_commit = function(self)
+              os.execute("/etc/init.d/vless restart >/dev/null 2>&1 &")
+          end
+
           s = m:section(NamedSection, "main", "server", "Настройки сервера")
           s.addremove = false
           s:option(Flag, "enabled", "Включить VPN")
           s:option(Value, "server", "IP Сервера / Домен")
           s:option(Value, "port", "Порт")
           s:option(Value, "uuid", "UUID")
+          
+          t = s:option(ListValue, "transport", "Тип транспорта")
+          t:value("tcp", "TCP + XTLS-Vision (Стандарт)")
+          t:value("xhttp", "XHTTP (Split-HTTP)")
+          t.default = "tcp"
+          
           s:option(Value, "sni", "SNI (Server Name Indication)")
           s:option(Value, "pbk", "Public Key (pbk)")
           s:option(Value, "sid", "Short ID (sid)")
           return m
           EOF
 
-          # 4. Системный демон маршрутизации и автозапуска
+          # Системный демон маршрутизации и автозапуска
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -105,6 +119,7 @@ jobs:
               config_get server main server
               config_get port main port '443'
               config_get uuid main uuid
+              config_get transport main transport 'tcp'
               config_get sni main sni
               config_get pbk main pbk
               config_get sid main sid
@@ -112,6 +127,15 @@ jobs:
               mkdir -p /tmp/geo
               [ -f /tmp/geo/geoip-ru.srs ] || wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
               [ -f /tmp/geo/geosite-ru.srs ] || wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
+
+              # Исключение конфликта транспортов и Vision
+              if [ "$transport" = "xhttp" ]; then
+                  FLOW_BLOCK=''
+                  TRANS_BLOCK='"transport": {"type": "xhttp"},'
+              else
+                  FLOW_BLOCK='"flow": "xtls-rprx-vision",'
+                  TRANS_BLOCK=''
+              fi
 
               cat <<JSON > /tmp/sing-box.json
               {
@@ -124,8 +148,8 @@ jobs:
                     "server": "$server",
                     "server_port": $port,
                     "uuid": "$uuid",
-                    "flow": "xtls-rprx-vision",
-                    "transport": {"type": "xhttp"},
+                    $FLOW_BLOCK
+                    $TRANS_BLOCK
                     "tls": {
                       "enabled": true,
                       "server_name": "$sni",
@@ -160,7 +184,6 @@ jobs:
           EOF
           chmod +x builder/files/etc/init.d/vless
 
-          # Скрипт активации демона после прошивки
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-vless
           #!/bin/sh
           /etc/init.d/vless enable
@@ -168,13 +191,10 @@ jobs:
           EOF
           chmod +x builder/files/etc/uci-defaults/99-enable-vless
 
-      - name: Build Firmware with OpenWrt 24.10.5 baseline
+      - name: Build Firmware with OpenWrt 24.10.6 baseline
         run: |
           cd builder
-          # Исключение тяжелых модулей IPv6 и USB
           EXCLUDE_PKGS="-odhcp6c -kmod-ipv6 -luci-proto-ipv6 -kmod-usb-core -kmod-usb3 -ppp -ppp-mod-pppoe"
-          
-          # Установка базового веб-интерфейса, совместимости для Lua и сертификатов
           INCLUDE_PKGS="luci luci-base luci-compat luci-theme-bootstrap wpad-basic-mbedtls ca-bundle"
           
           make image PROFILE="cudy_wr3000-v1" PACKAGES="$INCLUDE_PKGS $EXCLUDE_PKGS" FILES="files"
@@ -182,5 +202,5 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Cudy-WR3000-v1-OpenWrt-24.10.5-MicroVLESS
+          name: Cudy-WR3000-v1-OpenWrt-24.10.6-MicroVLESS
           path: builder/bin/targets/mediatek/filogic/*-sysupgrade.bin
