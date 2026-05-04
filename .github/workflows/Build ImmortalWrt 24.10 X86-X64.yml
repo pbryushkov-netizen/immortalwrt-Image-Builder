@@ -18,7 +18,7 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build custom minimal Sing-box and compress with UPX
+      - name: Build custom minimal Sing-box
         run: |
           sudo apt-get update
           sudo apt-get install -y upx-ucl zstd
@@ -63,6 +63,7 @@ jobs:
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
 
+          # 1. Config Template
           cat << 'EOF' > builder/files/etc/config/vless
           config server 'main'
               option enabled '0'
@@ -75,6 +76,7 @@ jobs:
               option sid ''
           EOF
 
+          # 2. LuCI Menu Entry
           cat << 'EOF' > builder/files/usr/lib/lua/luci/controller/vless.lua
           module("luci.controller.vless", package.seeall)
           function index()
@@ -83,8 +85,9 @@ jobs:
           end
           EOF
 
+          # 3. LuCI Visual Form
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
-          m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент. Базы и ядро автоматически скачиваются в оперативную память.")
+          m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент. Базы и ядро автоматически скачиваются в RAM.")
           
           m.on_after_commit = function(self)
               os.execute("/etc/init.d/vless restart >/dev/null 2>&1 &")
@@ -108,17 +111,16 @@ jobs:
           return m
           EOF
 
-          # Скрипт-обертка для скачивания в RAM
+          # 4. RAM Downloader Daemon
           cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
           #!/bin/sh
           if [ ! -x /tmp/sing-box ]; then
               logger -t "VPN" "Waiting for internet connection..."
               while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do sleep 3; done
               logger -t "VPN" "Internet OK. Downloading core to RAM..."
-              URL1="https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
-              URL2="https://mirror.ghproxy.com/https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
-              URL3="https://ghp.ci/https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
-              wget -qO /tmp/sing-box "$URL1" || wget -qO /tmp/sing-box "$URL2" || wget -qO /tmp/sing-box "$URL3"
+              URL1="https://github.com/${GITHUB_REPOSITORY}/releases/download/vpn-core/sing-box-custom"
+              URL2="https://mirror.ghproxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/vpn-core/sing-box-custom"
+              wget -qO /tmp/sing-box "$URL1" || wget -qO /tmp/sing-box "$URL2"
               chmod +x /tmp/sing-box
           fi
           
@@ -131,6 +133,7 @@ jobs:
           EOF
           chmod +x builder/files/usr/bin/vpn-runner.sh
 
+          # 5. Service Init Script (Clean JSON formatting)
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -157,42 +160,42 @@ jobs:
                   TRANS_BLOCK=''
               fi
 
-              cat <<JSON > /tmp/sing-box.json
+              cat > /tmp/sing-box.json << JSONEOF
+          {
+            "log": {"level": "error"},
+            "inbounds": [{"type": "tun", "tag": "tun-in", "interface_name": "tun0", "inet4_address": "172.19.0.1/30", "auto_route": true, "strict_route": true}],
+            "outbounds": [
               {
-                "log": {"level": "error"},
-                "inbounds": [{"type": "tun", "tag": "tun-in", "interface_name": "tun0", "inet4_address": "172.19.0.1/30", "auto_route": true, "strict_route": true}],
-                "outbounds": [
-                  {
-                    "type": "vless",
-                    "tag": "vless-out",
-                    "server": "$server",
-                    "server_port": $port,
-                    "uuid": "$uuid",
-                    $FLOW_BLOCK
-                    $TRANS_BLOCK
-                    "tls": {
-                      "enabled": true,
-                      "server_name": "$sni",
-                      "utls": {"enabled": true, "fingerprint": "chrome"},
-                      "reality": {"enabled": true, "public_key": "$pbk", "short_id": "$sid"}
-                    },
-                    "packet_encoding": "xudp"
-                  },
-                  {"type": "direct", "tag": "direct"}
-                ],
-                "route": {
-                  "rule_set": [
-                    {"tag": "geoip-ru", "type": "local", "format": "binary", "path": "/tmp/geo/geoip-ru.srs"},
-                    {"tag": "geosite-ru", "type": "local", "format": "binary", "path": "/tmp/geo/geosite-ru.srs"}
-                  ],
-                  "rules": [
-                    {"rule_set": ["geoip-ru", "geosite-ru"], "outbound": "direct"},
-                    {"domain_suffix": [".ru", ".su"], "outbound": "direct"}
-                  ],
-                  "auto_detect_interface": true
-                }
-              }
-JSON
+                "type": "vless",
+                "tag": "vless-out",
+                "server": "$server",
+                "server_port": $port,
+                "uuid": "$uuid",
+                $FLOW_BLOCK
+                $TRANS_BLOCK
+                "tls": {
+                  "enabled": true,
+                  "server_name": "$sni",
+                  "utls": {"enabled": true, "fingerprint": "chrome"},
+                  "reality": {"enabled": true, "public_key": "$pbk", "short_id": "$sid"}
+                },
+                "packet_encoding": "xudp"
+              },
+              {"type": "direct", "tag": "direct"}
+            ],
+            "route": {
+              "rule_set": [
+                {"tag": "geoip-ru", "type": "local", "format": "binary", "path": "/tmp/geo/geoip-ru.srs"},
+                {"tag": "geosite-ru", "type": "local", "format": "binary", "path": "/tmp/geo/geosite-ru.srs"}
+              ],
+              "rules": [
+                {"rule_set": ["geoip-ru", "geosite-ru"], "outbound": "direct"},
+                {"domain_suffix": [".ru", ".su"], "outbound": "direct"}
+              ],
+              "auto_detect_interface": true
+            }
+          }
+          JSONEOF
 
               procd_open_instance
               procd_set_param command /usr/bin/vpn-runner.sh
@@ -202,8 +205,12 @@ JSON
               procd_close_instance
           }
           EOF
+          
+          # Убираем пробелы-убийцы парсера перед тегом JSONEOF
+          sed -i 's/^[ \t]*JSONEOF/JSONEOF/' builder/files/etc/init.d/vless
           chmod +x builder/files/etc/init.d/vless
 
+          # 6. Autostart
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-vless
           #!/bin/sh
           /etc/init.d/vless enable
