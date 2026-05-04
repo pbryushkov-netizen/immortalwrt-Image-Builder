@@ -1,4 +1,4 @@
-name: Build ImmortalWrt for Cudy WR3000 v1 (UPX Edition)
+name: Build ImmortalWrt for Cudy WR3000 v1 (Shadowsocks Edition)
 on:
   push:
     branches: [ "master" ]
@@ -8,7 +8,8 @@ env:
   PROFILE: cudy_wr3000-v1
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  PACKAGES: -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl -kmod-nft-offload -kmod-tcp-bbr
+  # Легковесные клиенты на C + графический интерфейс LuCI
+  PACKAGES: luci-app-shadowsocks-libev shadowsocks-libev-ss-local shadowsocks-libev-ss-redir xray-plugin -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl -kmod-nft-offload -kmod-tcp-bbr
   DOWNLOAD_URL: https://downloads.immortalwrt.org/releases/24.10.5/targets/mediatek/filogic/immortalwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
   TZ: Europe/Moscow
 
@@ -25,7 +26,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd upx-ucl
+        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd
 
     - name: Download and extract Image Builder
       run: |
@@ -39,21 +40,10 @@ jobs:
         ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*")
         echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
 
-    - name: Inject UPX-compressed Sing-Box
-      run: |
-        cd /tmp
-        wget -qO sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.12.0/sing-box-1.12.0-linux-arm64.tar.gz
-        tar -xzf sing-box.tar.gz
-        upx --best sing-box-1.12.0-linux-arm64/sing-box
-        
-        sudo mkdir -p ${{ env.ROOT_DIRECTORY }}/files/usr/bin
-        sudo cp sing-box-1.12.0-linux-arm64/sing-box ${{ env.ROOT_DIRECTORY }}/files/usr/bin/
-        sudo chmod +x ${{ env.ROOT_DIRECTORY }}/files/usr/bin/sing-box
-
     - name: Compile firmware
       run: |
         cd ${{ env.ROOT_DIRECTORY }}
-        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}" FILES="files"
+        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}"
         
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         sudo mkdir -p /tmp/bin_firmware
@@ -78,7 +68,7 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=Cudy-WR3000-v1-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "Custom ImmortalWrt with UPX-compressed sing-box" > release.txt
+        echo "Custom ImmortalWrt with Shadowsocks-libev and Xray-plugin" > release.txt
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
