@@ -1,0 +1,9 @@
+<%+header%>
+<h2>VPN Status</h2>
+<% if running then %>
+<p style="color:green;font-weight:bold">&#10003; Tunnel active</p>
+<% else %>
+<p style="color:gray">&#9675; Tunnel not running</p>
+<% end %>
+<p><a href="<%=luci.dispatcher.build_url("admin","vpn","settings")%>">&larr; Settings</a></p>
+<%+footer%>

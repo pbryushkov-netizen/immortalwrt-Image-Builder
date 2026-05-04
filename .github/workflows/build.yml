@@ -1,0 +1,138 @@
+name: Build OpenWrt 24.10.6 — Cudy WR3000 v1 — Smart VLESS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'files/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+
+      # ── 1. Исходники репозитория ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Компиляция минимального sing-box для ARM64 ────────────────────
+      #   Tags: only vless + xhttp + reality + utls — no ss/trojan/hysteria/wg
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build minimal sing-box (arm64)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zstd git
+
+          git clone --depth=1 --branch v1.10.7 \
+            https://github.com/SagerNet/sing-box.git sing-box
+          cd sing-box
+
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+          go build -trimpath \
+            -ldflags "-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.10.7" \
+            -tags "with_vless,with_utls,with_reality,with_xhttp" \
+            -o ../sing-box ./cmd/sing-box
+          cd ..
+          ls -lh sing-box
+
+      # ── 3. Публикуем бинарник как GitHub Release ─────────────────────────
+      #   Роутер скачает его при первом старте в /tmp (256 МБ RAM, не Flash!)
+      - name: Publish sing-box binary as GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete vpn-core --cleanup-tag -y 2>/dev/null || true
+          gh release create vpn-core sing-box \
+            --title "VPN Core (ARM64 sing-box v1.10.7)" \
+            --notes "Автоматическая сборка. Скачивается роутером в /tmp при старте."
+
+      # ── 4. Скачиваем OpenWrt 24.10.6 Image Builder ───────────────────────
+      - name: Download OpenWrt 24.10.6 Image Builder
+        run: |
+          IB_URL="https://downloads.openwrt.org/releases/24.10.6/targets/mediatek/filogic/openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst"
+          wget -q "$IB_URL"
+          tar -xf openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst
+          mv openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64 builder
+
+      # ── 5. Максимальное сжатие SquashFS ──────────────────────────────────
+      - name: Enable maximum SquashFS compression
+        run: |
+          cd builder
+          if grep -q 'CONFIG_TARGET_SQUASHFS_BLOCK_SIZE' .config; then
+            sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=.*/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/' .config
+          else
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024" >> .config
+          fi
+
+      # ── 6. Подготовка файлов прошивки ────────────────────────────────────
+      #   Скрипты и конфиги хранятся в files/ репозитория — никаких heredoc-ов!
+      - name: Prepare firmware overlay
+        run: |
+          # Подставляем реальный репозиторий в скрипт (нужен для скачивания sing-box)
+          sed -i "s|GITHUB_REPO_PLACEHOLDER|${{ github.repository }}|g" \
+            files/usr/bin/vpn-runner.sh
+
+          # Права на исполнение
+          chmod +x files/usr/bin/vless-parse.sh \
+                   files/usr/bin/vpn-runner.sh \
+                   files/usr/bin/vpn-subscription.sh \
+                   files/etc/init.d/vpn \
+                   files/etc/uci-defaults/99-vpn-enable
+
+          # Копируем всё в директорию ImageBuilder
+          cp -r files builder/files
+          echo "=== Структура files/ ==="
+          find builder/files -type f | sort
+
+      # ── 7. Сборка прошивки ────────────────────────────────────────────────
+      #   Пакеты подобраны для укладывания в 16 МБ Flash
+      #   Исключаем: IPv6, USB, PPP, luci-app-firewall, luci-app-opkg
+      - name: Build firmware image
+        run: |
+          cd builder
+
+          PACKAGES="
+            luci luci-base luci-compat luci-theme-bootstrap
+            luci-mod-admin-full luci-mod-rpc luci-mod-status
+            luci-app-uhttpd uhttpd uhttpd-mod-ubus
+            kmod-tun ip-full
+            kmod-nft-core nftables kmod-nft-nat
+            ipset libubox libuci
+            curl ca-bundle ca-certificates
+            wpad-basic-mbedtls
+            kmod-ath11k-ahb ath11k-firmware-ipq6018
+            -odhcp6c -odhcpd-ipv6only
+            -kmod-ipv6 -kmod-ip6tables -ip6tables
+            -luci-proto-ipv6 -luci-proto-ppp
+            -kmod-usb-core -kmod-usb3
+            -ppp -ppp-mod-pppoe
+            -luci-app-firewall -luci-app-opkg
+          "
+
+          make image \
+            PROFILE="cudy_wr3000-v1" \
+            PACKAGES="$(echo $PACKAGES | tr -s ' ')" \
+            FILES="files" \
+            EXTRA_IMAGE_NAME="vless" \
+            -j$(nproc) 2>&1 | tail -40
+
+          ls -lh bin/targets/mediatek/filogic/*.bin 2>/dev/null || \
+          ls -lh bin/targets/mediatek/filogic/ | head -20
+
+      # ── 8. Загружаем артефакт ─────────────────────────────────────────────
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-cudy-wr3000-v1-vless
+          path: builder/bin/targets/mediatek/filogic/*sysupgrade*
+          retention-days: 30
+          if-no-files-found: error
