@@ -108,30 +108,40 @@ jobs:
           return m
           EOF
 
-          # Исправленный загрузчик: строгий IPv4 через cURL + фикс инъекции репозитория
+          # Функция надежного скачивания через зеркала (для ядра и баз)
           cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
           #!/bin/sh
+          download() {
+              FILE=$1
+              URL=$2
+              logger -t "VPN" "Downloading $FILE..."
+              curl -sfL -4 --connect-timeout 10 -o "$FILE" "$URL" || \
+              curl -sfL -4 --connect-timeout 10 -o "$FILE" "https://mirror.ghproxy.com/$URL" || \
+              curl -sfL -4 --connect-timeout 10 -o "$FILE" "https://ghp.ci/$URL"
+          }
+
           if [ ! -x /tmp/sing-box ]; then
               logger -t "VPN" "Waiting for internet connection..."
               while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do sleep 3; done
               logger -t "VPN" "Internet OK. Downloading core to RAM..."
-              
-              URL1="https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
-              URL2="https://mirror.ghproxy.com/https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
-              
-              curl -sfL -4 --connect-timeout 10 -o /tmp/sing-box "$URL1" || curl -sfL -4 --connect-timeout 10 -o /tmp/sing-box "$URL2"
+              download "/tmp/sing-box" "https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
               chmod +x /tmp/sing-box
           fi
           
           mkdir -p /tmp/geo
-          [ -f /tmp/geo/geoip-ru.srs ] || curl -sfL -4 --connect-timeout 10 -o /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
-          [ -f /tmp/geo/geosite-ru.srs ] || curl -sfL -4 --connect-timeout 10 -o /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
+          [ -f /tmp/geo/geoip-ru.srs ] || download "/tmp/geo/geoip-ru.srs" "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs"
+          [ -f /tmp/geo/geosite-ru.srs ] || download "/tmp/geo/geosite-ru.srs" "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs"
+          
+          if [ ! -f /tmp/geo/geoip-ru.srs ]; then
+              logger -t "VPN" "Error: Failed to download GeoIP databases"
+              sleep 10
+              exit 1
+          fi
           
           logger -t "VPN" "Starting tunnel..."
           exec /tmp/sing-box run -c /tmp/sing-box.json
           EOF
           
-          # Безопасная подмена переменной репозитория после создания файла
           sed -i "s|GITHUB_REPO_PLACEHOLDER|${{ github.repository }}|g" builder/files/usr/bin/vpn-runner.sh
           chmod +x builder/files/usr/bin/vpn-runner.sh
 
