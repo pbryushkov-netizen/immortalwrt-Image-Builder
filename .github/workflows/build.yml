@@ -109,16 +109,16 @@ jobs:
         run: |
           cd builder
 
+          # Добавляем только то, чего нет в базовом профиле cudy_wr3000-v1:
+          #   luci + тема — веб-интерфейс
+          #   kmod-tun   — TUN устройство для sing-box
+          #   ip-full    — политическая маршрутизация (ip rule / ip route table)
+          #   curl + ca-bundle — загрузка sing-box и GeoIP
+          # Убираем балласт (IPv6, USB, PPP, ненужные luci-app): экономим ~2-3 МБ
           PACKAGES="
-            luci luci-base luci-compat luci-theme-bootstrap
-            luci-mod-admin-full luci-mod-rpc luci-mod-status
-            luci-app-uhttpd uhttpd uhttpd-mod-ubus
+            luci luci-theme-bootstrap
             kmod-tun ip-full
-            kmod-nft-core nftables kmod-nft-nat
-            ipset libubox libuci
-            curl ca-bundle ca-certificates
-            wpad-basic-mbedtls
-            kmod-ath11k-ahb ath11k-firmware-ipq6018
+            curl ca-bundle
             -odhcp6c -odhcpd-ipv6only
             -kmod-ipv6 -kmod-ip6tables -ip6tables
             -luci-proto-ipv6 -luci-proto-ppp
@@ -132,8 +132,9 @@ jobs:
             PACKAGES="$(echo $PACKAGES | tr -s ' ')" \
             FILES="files" \
             EXTRA_IMAGE_NAME="vless" \
-            -j$(nproc) 2>&1 | tail -40
+            2>&1 | tail -50
 
+          echo "=== Готовые образы ==="
           ls -lh bin/targets/mediatek/filogic/*.bin 2>/dev/null || \
           ls -lh bin/targets/mediatek/filogic/ | head -20
 
