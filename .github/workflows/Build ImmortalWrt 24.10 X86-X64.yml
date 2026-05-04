@@ -3,6 +3,9 @@ name: Build Custom OpenWrt 24.10.6 with Micro VLESS GUI
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,10 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y upx-ucl zstd
           
-          # Принудительно меняем протокол с SSH на HTTPS для сабмодулей
           git config --global url."https://github.com/".insteadOf "git@github.com:"
-          
-          # Скачиваем форк от Hiddify со всеми зависимостями
           git clone --recursive https://github.com/hiddify/hiddify-sing-box.git sing-box
           cd sing-box
           export CGO_ENABLED=0
@@ -36,6 +36,13 @@ jobs:
           
           upx --best --lzma sing-box-custom
 
+      - name: Upload VPN Core to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete vpn-core --cleanup-tag -y || true
+          gh release create vpn-core sing-box-custom -t "VPN Core (RAM-based)" -n "Автоматическая сборка ядра для загрузки в оперативную память роутера"
+
       - name: Setup Vanilla OpenWrt 24.10.6 ImageBuilder
         run: |
           wget https://downloads.openwrt.org/releases/24.10.6/targets/mediatek/filogic/openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst
@@ -47,7 +54,7 @@ jobs:
           cd builder
           sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
 
-      - name: Inject Micro LuCI GUI and Sing-box Engine
+      - name: Inject Micro LuCI GUI and RAM Loader
         run: |
           mkdir -p builder/files/usr/bin/
           mkdir -p builder/files/etc/config/
@@ -55,9 +62,6 @@ jobs:
           mkdir -p builder/files/usr/lib/lua/luci/model/cbi/
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
-          
-          cp sing-box-custom builder/files/usr/bin/sing-box
-          chmod +x builder/files/usr/bin/sing-box
 
           cat << 'EOF' > builder/files/etc/config/vless
           config server 'main'
@@ -80,7 +84,7 @@ jobs:
           EOF
 
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
-          m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент Sing-Box. Базы маршрутизации загружаются в RAM автоматически.")
+          m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент. Базы и ядро автоматически скачиваются в оперативную память.")
           
           m.on_after_commit = function(self)
               os.execute("/etc/init.d/vless restart >/dev/null 2>&1 &")
@@ -104,6 +108,29 @@ jobs:
           return m
           EOF
 
+          # Скрипт-обертка для скачивания в RAM
+          cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
+          #!/bin/sh
+          if [ ! -x /tmp/sing-box ]; then
+              logger -t "VPN" "Waiting for internet connection..."
+              while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do sleep 3; done
+              logger -t "VPN" "Internet OK. Downloading core to RAM..."
+              URL1="https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
+              URL2="https://mirror.ghproxy.com/https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
+              URL3="https://ghp.ci/https://github.com/${{ github.repository }}/releases/download/vpn-core/sing-box-custom"
+              wget -qO /tmp/sing-box "$URL1" || wget -qO /tmp/sing-box "$URL2" || wget -qO /tmp/sing-box "$URL3"
+              chmod +x /tmp/sing-box
+          fi
+          
+          mkdir -p /tmp/geo
+          [ -f /tmp/geo/geoip-ru.srs ] || wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
+          [ -f /tmp/geo/geosite-ru.srs ] || wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
+          
+          logger -t "VPN" "Starting tunnel..."
+          exec /tmp/sing-box run -c /tmp/sing-box.json
+          EOF
+          chmod +x builder/files/usr/bin/vpn-runner.sh
+
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -121,10 +148,6 @@ jobs:
               config_get sni main sni
               config_get pbk main pbk
               config_get sid main sid
-
-              mkdir -p /tmp/geo
-              [ -f /tmp/geo/geoip-ru.srs ] || wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
-              [ -f /tmp/geo/geosite-ru.srs ] || wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
 
               if [ "$transport" = "xhttp" ]; then
                   FLOW_BLOCK=''
@@ -169,10 +192,10 @@ jobs:
                   "auto_detect_interface": true
                 }
               }
-          JSON
+JSON
 
               procd_open_instance
-              procd_set_param command /usr/bin/sing-box run -c /tmp/sing-box.json
+              procd_set_param command /usr/bin/vpn-runner.sh
               procd_set_param respawn
               procd_set_param stdout 1
               procd_set_param stderr 1
@@ -192,7 +215,7 @@ jobs:
         run: |
           cd builder
           EXCLUDE_PKGS="-odhcp6c -kmod-ipv6 -luci-proto-ipv6 -kmod-usb-core -kmod-usb3 -ppp -ppp-mod-pppoe"
-          INCLUDE_PKGS="luci luci-base luci-compat luci-theme-bootstrap wpad-basic-mbedtls ca-bundle"
+          INCLUDE_PKGS="luci luci-base luci-compat luci-theme-bootstrap wpad-basic-mbedtls ca-bundle curl"
           
           make image PROFILE="cudy_wr3000-v1" PACKAGES="$INCLUDE_PKGS $EXCLUDE_PKGS" FILES="files"
 
