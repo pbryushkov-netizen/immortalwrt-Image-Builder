@@ -1,78 +1,92 @@
-name: Build OpenWrt for Cudy WR3000 v1
-on:
-  push:
-    branches: [ "master" ]
-  workflow_dispatch:
+name: Build Ultra-Compact Cudy WR3000 Firmware
 
-env:
-  PROFILE: cudy_wr3000-v1
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
-  # В чистом OpenWrt нам не нужно вырезать десятки пакетов. 
-  # Добавляем VPN-клиенты и удаляем только драйверы USB для экономии места.
-  PACKAGES: "luci-app-shadowsocks-libev shadowsocks-libev-ss-local shadowsocks-libev-ss-redir xray-plugin -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3"
-  DOWNLOAD_URL: https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-imagebuilder-23.05.5-mediatek-filogic.Linux-x86_64.tar.xz
-  TZ: Europe/Moscow
+on:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Initialize environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
 
-    - name: Download and extract Image Builder
-      run: |
-        wget -qO /tmp/imagebuilder.tar.xz $DOWNLOAD_URL
-        sudo tar -xf /tmp/imagebuilder.tar.xz -C /tmp
-        rm /tmp/imagebuilder.tar.xz
+      - name: Build custom minimal Sing-box
+        run: |
+          git clone https://github.com/SagerNet/sing-box.git
+          cd sing-box
+          # Экстремальная оптимизация бинарника. Отключаем всё лишнее через теги сборки.
+          # Оставляем только VLESS, Reality, xhttp (через стандартные транспорты) и uTLS.
+          export CGO_ENABLED=0
+          export GOOS=linux
+          export GOARCH=arm64
+          go build -v -trimpath -ldflags "-s -w -buildid=" \
+            -tags "with_vless,with_utls,with_reality,with_clash_api" \
+            -o ../sing-box-custom ./cmd/sing-box
+          cd ..
+          echo "Размер кастомного ядра Sing-box:"
+          ls -lh sing-box-custom
 
-    - name: Set Image Builder root directory
-      run: |
-        ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "openwrt-imagebuilder-*")
-        echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
+      - name: Setup ImmortalWrt ImageBuilder (MT7981)
+        run: |
+          wget https://downloads.immortalwrt.org/releases/23.05.4/targets/mediatek/filogic/immortalwrt-imagebuilder-23.05.4-mediatek-filogic.Linux-x86_64.tar.xz
+          tar -xf immortalwrt-imagebuilder-*.tar.xz
+          mv immortalwrt-imagebuilder-*/ builder
 
-    - name: Compile firmware
-      run: |
-        cd ${{ env.ROOT_DIRECTORY }}
-        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}"
-        
-        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        sudo mkdir -p /tmp/bin_firmware
-        sudo find bin/targets/ -type f -name "*.bin" -exec cp {} /tmp/bin_firmware/ \;
-        sudo find bin/targets/ -type f -name "*.manifest" -exec cp {} /tmp/bin_firmware/ \;
+      - name: Patch SquashFS compression block size
+        run: |
+          # Увеличиваем размер блока словаря xz с дефолтных 256k до 1024k для экстремального сжатия
+          sed -i 's/-b 256k/-b 1024k/g' builder/include/image.mk
 
-    - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        cd /tmp/bin_firmware
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+      - name: Inject custom Sing-box and RAM-based GeoIP Script
+        run: |
+          mkdir -p builder/files/usr/bin/
+          mkdir -p builder/files/etc/init.d/
+          mkdir -p builder/files/etc/uci-defaults/
+          
+          # 1. Подмена ядра (ImageBuilder перезапишет бинарник из пакета нашим)
+          cp sing-box-custom builder/files/usr/bin/sing-box
+          chmod +x builder/files/usr/bin/sing-box
 
-    - name: Upload firmware to Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: OpenWrt-Cudy-WR3000-v1-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+          # 2. Скрипт для скачивания баз маршрутизации в RAM (/tmp) при старте
+          cat << 'EOF' > builder/files/etc/init.d/geo-ram-loader
+          #!/bin/sh /etc/rc.common
+          START=99
+          start() {
+            mkdir -p /tmp/geo
+            logger -t "GeoRAM" "Downloading RU routing rules to RAM..."
+            wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
+            wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
+            logger -t "GeoRAM" "Geo rules updated. Restarting VPN daemon..."
+            /etc/init.d/homeproxy restart
+          }
+          EOF
+          chmod +x builder/files/etc/init.d/geo-ram-loader
 
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        echo "release_tag=Cudy-WR3000-v1-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "Official OpenWrt with Shadowsocks-libev and Xray-plugin" > release.txt
+          # 3. Автоматическое включение скрипта при первой загрузке
+          cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-geo-ram
+          #!/bin/sh
+          /etc/init.d/geo-ram-loader enable
+          /etc/init.d/geo-ram-loader start
+          rm -f /etc/uci-defaults/99-enable-geo-ram
+          EOF
+          chmod +x builder/files/etc/uci-defaults/99-enable-geo-ram
 
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+      - name: Build Firmware with aggressive package reduction
+        run: |
+          cd builder
+          # Пакеты со знаком "-" будут вырезаны из базовой прошивки
+          EXCLUDE_PKGS="-luci-theme-argon -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -wpad-basic-mbedtls -kmod-sound-core -kmod-usb-dwc3"
+          INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-openssl curl"
+          
+          make image PROFILE="cudy_wr3000-v1" PACKAGES="$INCLUDE_PKGS $EXCLUDE_PKGS" FILES="files"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cudy-WR3000-v1-UltraCompact
+          path: builder/bin/targets/mediatek/filogic/*-sysupgrade.bin
