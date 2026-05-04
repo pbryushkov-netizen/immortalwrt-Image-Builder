@@ -108,33 +108,49 @@ jobs:
           return m
           EOF
 
-          # Скрипт с правильными ссылками на специализированный RU-репозиторий
+          # Скрипт с надежной логикой загрузки и CDN jsDelivr/ghproxy
           cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
           #!/bin/sh
           download() {
               FILE=$1
               URL=$2
+              JSD_URL=$3
               logger -t "VPN" "Downloading $FILE..."
               rm -f "$FILE"
-              curl -sfLk -4 --connect-timeout 15 -o "$FILE" "$URL" || \
-              curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://mirror.ghproxy.com/$URL" || \
-              curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://ghp.ci/$URL"
+              if [ -n "$JSD_URL" ]; then
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "$JSD_URL" || \
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "$URL" || \
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://mirror.ghproxy.com/$URL"
+              else
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "$URL" || \
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://mirror.ghproxy.com/$URL" || \
+                  curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://ghp.ci/$URL"
+              fi
           }
 
-          if [ ! -x /tmp/sing-box ]; then
+          if [ ! -s /tmp/sing-box ]; then
               logger -t "VPN" "Waiting for internet connection..."
               while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do sleep 3; done
               logger -t "VPN" "Internet OK. Downloading core to RAM..."
-              download "/tmp/sing-box" "https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
-              chmod +x /tmp/sing-box
+              download "/tmp/sing-box" "https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom" ""
+              
+              if [ -s /tmp/sing-box ]; then
+                  chmod +x /tmp/sing-box
+              else
+                  logger -t "VPN" "Error: Failed to download sing-box core"
+                  rm -f /tmp/sing-box
+                  sleep 10
+                  exit 1
+              fi
           fi
           
           mkdir -p /tmp/geo
-          [ -s /tmp/geo/geoip-ru.srs ] || download "/tmp/geo/geoip-ru.srs" "https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geoip.srs"
-          [ -s /tmp/geo/geosite-ru.srs ] || download "/tmp/geo/geosite-ru.srs" "https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geosite.srs"
+          # Используем официальные исходники SagerNet и jsDelivr CDN для скорости
+          [ -s /tmp/geo/geoip-ru.srs ] || download "/tmp/geo/geoip-ru.srs" "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs" "https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-ru.srs"
+          [ -s /tmp/geo/geosite-ru.srs ] || download "/tmp/geo/geosite-ru.srs" "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-ru.srs" "https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-ru.srs"
           
-          if [ ! -s /tmp/geo/geoip-ru.srs ]; then
-              logger -t "VPN" "Error: Failed to download GeoIP databases"
+          if [ ! -s /tmp/geo/geoip-ru.srs ] || [ ! -s /tmp/geo/geosite-ru.srs ]; then
+              logger -t "VPN" "Error: Failed to download GeoIP/GeoSite databases"
               rm -f /tmp/geo/geoip-ru.srs /tmp/geo/geosite-ru.srs
               sleep 10
               exit 1
