@@ -25,13 +25,11 @@ jobs:
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=arm64
-          # Собираем только самое необходимое
           go build -v -trimpath -ldflags "-s -w -buildid=" \
             -tags "with_vless,with_utls,with_reality,with_clash_api" \
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
           
-          # Сжатие LZMA
           upx --best --lzma sing-box-custom
 
       - name: Setup ImmortalWrt ImageBuilder (MT7981)
@@ -46,21 +44,15 @@ jobs:
           sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
           sed -i 's/CONFIG_TARGET_IMAGES_GZIP=y/# CONFIG_TARGET_IMAGES_GZIP is not set/g' .config
 
-      - name: Inject custom Sing-box and RAM-based GeoIP Script
+      - name: Inject files and deploy MKSQUASHFS Interceptor
         run: |
           mkdir -p builder/files/usr/bin/
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
           
-          # Создаем пустые заглушки для гео-баз, чтобы исключить их распаковку во Flash
-          mkdir -p builder/files/etc/homeproxy/resources
-          touch builder/files/etc/homeproxy/resources/geoip.srs
-          touch builder/files/etc/homeproxy/resources/geosite.srs
-          
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
-          # Скрипт скачивания баз в оперативную память при старте
           cat << 'EOF' > builder/files/etc/init.d/geo-ram-loader
           #!/bin/sh /etc/rc.common
           START=99
@@ -82,11 +74,35 @@ jobs:
           EOF
           chmod +x builder/files/etc/uci-defaults/99-enable-geo-ram
 
-      - name: Build Firmware with maximum base OS reduction
+          # === ПЕРЕХВАТЧИК MKSQUASHFS ===
+          # Этот блок решает проблему жестких зависимостей
+          MKSQ_PATH=$(find builder -name mksquashfs4 | head -n 1)
+          mv "$MKSQ_PATH" "${MKSQ_PATH}_real"
+          
+          cat << 'EOF' > "$MKSQ_PATH"
+          #!/bin/bash
+          TARGET_DIR=$1
+          
+          echo "=== ПРИНУДИТЕЛЬНОЕ УДАЛЕНИЕ ЖЕСТКИХ ЗАВИСИМОСТЕЙ ==="
+          rm -rf "$TARGET_DIR"/usr/share/v2ray/* 2>/dev/null
+          rm -rf "$TARGET_DIR"/usr/share/sing-box/* 2>/dev/null
+          rm -rf "$TARGET_DIR"/usr/share/xray/* 2>/dev/null
+          rm -rf "$TARGET_DIR"/etc/homeproxy/resources/* 2>/dev/null
+          
+          # Создание пустых файлов для корректной инициализации Homeproxy
+          mkdir -p "$TARGET_DIR"/usr/share/sing-box
+          touch "$TARGET_DIR"/usr/share/sing-box/geoip.srs
+          touch "$TARGET_DIR"/usr/share/sing-box/geosite.srs
+          
+          # Запуск оригинального упаковщика
+          exec "${0}_real" "$@"
+          EOF
+          chmod +x "$MKSQ_PATH"
+
+      - name: Build Firmware with base OS reduction
         run: |
           cd builder
-          # Расширенный список тотальной зачистки (добавлены nlbwmon, wireguard, zerotier, scsi, storage)
-          EXCLUDE_PKGS="-luci-app-nlbwmon -nlbwmon -luci-app-zerotier -zerotier -luci-app-wireguard -wireguard-tools -kmod-wireguard -luci-theme-argon -luci-app-ttyd -ttyd -luci-app-upnp -miniupnpd -luci-app-samba4 -samba4-server -luci-app-filetransfer -luci-app-ramfree -luci-app-autoreboot -automount -kmod-fs-ext4 -kmod-fs-vfat -kmod-fs-exfat -kmod-nls-cp437 -kmod-nls-iso8859-1 -kmod-nls-utf8 -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -kmod-usb-storage -kmod-usb-storage-extras -kmod-scsi-core -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -kmod-sound-core -kmod-usb-dwc3 -wpad-openssl -wpad-basic-openssl -sing-box-geoip -sing-box-geosite -v2ray-geoip -v2ray-geosite -luci-i18n-base-zh-cn -luci-i18n-homeproxy-zh-cn"
+          EXCLUDE_PKGS="-luci-theme-argon -luci-app-ttyd -ttyd -luci-app-upnp -miniupnpd -luci-app-samba4 -samba4-server -luci-app-filetransfer -luci-app-ramfree -luci-app-autoreboot -automount -kmod-fs-ext4 -kmod-fs-vfat -kmod-fs-exfat -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -kmod-usb-storage -kmod-usb-storage-extras -kmod-scsi-core -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -kmod-sound-core -kmod-usb-dwc3 -wpad-openssl -wpad-basic-openssl -luci-i18n-base-zh-cn -luci-i18n-homeproxy-zh-cn"
           
           INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-basic-mbedtls"
           
