@@ -26,7 +26,7 @@ jobs:
           export GOOS=linux
           export GOARCH=arm64
           go build -v -trimpath -ldflags "-s -w -buildid=" \
-            -tags "with_vless,with_utls,with_reality" \
+            -tags "with_vless,with_utls,with_reality,with_xhttp" \
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
           
