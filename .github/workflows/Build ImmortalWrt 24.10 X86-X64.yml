@@ -63,7 +63,6 @@ jobs:
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
 
-          # 1. Config Template
           cat << 'EOF' > builder/files/etc/config/vless
           config server 'main'
               option enabled '0'
@@ -76,7 +75,6 @@ jobs:
               option sid ''
           EOF
 
-          # 2. LuCI Menu Entry
           cat << 'EOF' > builder/files/usr/lib/lua/luci/controller/vless.lua
           module("luci.controller.vless", package.seeall)
           function index()
@@ -85,7 +83,6 @@ jobs:
           end
           EOF
 
-          # 3. LuCI Visual Form
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
           m = Map("vless", "VLESS+Reality", "Ультра-компактный клиент. Базы и ядро автоматически скачиваются в RAM.")
           
@@ -111,29 +108,33 @@ jobs:
           return m
           EOF
 
-          # 4. RAM Downloader Daemon
+          # Исправленный загрузчик: строгий IPv4 через cURL + фикс инъекции репозитория
           cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
           #!/bin/sh
           if [ ! -x /tmp/sing-box ]; then
               logger -t "VPN" "Waiting for internet connection..."
               while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do sleep 3; done
               logger -t "VPN" "Internet OK. Downloading core to RAM..."
-              URL1="https://github.com/${GITHUB_REPOSITORY}/releases/download/vpn-core/sing-box-custom"
-              URL2="https://mirror.ghproxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/vpn-core/sing-box-custom"
-              wget -qO /tmp/sing-box "$URL1" || wget -qO /tmp/sing-box "$URL2"
+              
+              URL1="https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
+              URL2="https://mirror.ghproxy.com/https://github.com/GITHUB_REPO_PLACEHOLDER/releases/download/vpn-core/sing-box-custom"
+              
+              curl -sfL -4 --connect-timeout 10 -o /tmp/sing-box "$URL1" || curl -sfL -4 --connect-timeout 10 -o /tmp/sing-box "$URL2"
               chmod +x /tmp/sing-box
           fi
           
           mkdir -p /tmp/geo
-          [ -f /tmp/geo/geoip-ru.srs ] || wget -qO /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
-          [ -f /tmp/geo/geosite-ru.srs ] || wget -qO /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
+          [ -f /tmp/geo/geoip-ru.srs ] || curl -sfL -4 --connect-timeout 10 -o /tmp/geo/geoip-ru.srs https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs
+          [ -f /tmp/geo/geosite-ru.srs ] || curl -sfL -4 --connect-timeout 10 -o /tmp/geo/geosite-ru.srs https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs
           
           logger -t "VPN" "Starting tunnel..."
           exec /tmp/sing-box run -c /tmp/sing-box.json
           EOF
+          
+          # Безопасная подмена переменной репозитория после создания файла
+          sed -i "s|GITHUB_REPO_PLACEHOLDER|${{ github.repository }}|g" builder/files/usr/bin/vpn-runner.sh
           chmod +x builder/files/usr/bin/vpn-runner.sh
 
-          # 5. Service Init Script (Clean JSON formatting)
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -206,11 +207,9 @@ jobs:
           }
           EOF
           
-          # Убираем пробелы-убийцы парсера перед тегом JSONEOF
           sed -i 's/^[ \t]*JSONEOF/JSONEOF/' builder/files/etc/init.d/vless
           chmod +x builder/files/etc/init.d/vless
 
-          # 6. Autostart
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-vless
           #!/bin/sh
           /etc/init.d/vless enable
