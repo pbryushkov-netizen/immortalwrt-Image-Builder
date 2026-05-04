@@ -82,25 +82,33 @@ jobs:
           #!/bin/bash
           TARGET_DIR=$1
           
-          echo "=== РАДИКАЛЬНАЯ ОЧИСТКА ФАЙЛОВОЙ СИСТЕМЫ ==="
-          # Удаление статических баз
+          echo "=== РАДИКАЛЬНАЯ ЗАЧИСТКА ЯДРА И БАЗЫ ОС ==="
+          
+          # 1. Полное удаление пакетного менеджера OPKG
+          rm -rf "$TARGET_DIR"/usr/lib/opkg
+          rm -rf "$TARGET_DIR"/etc/opkg.conf
+          rm -f "$TARGET_DIR"/sbin/opkg "$TARGET_DIR"/usr/bin/opkg
+          
+          # 2. Физическое удаление модулей ядра (USB, IPv6, Файловые системы накопителей)
+          find "$TARGET_DIR"/lib/modules -name "*usb*" -delete
+          find "$TARGET_DIR"/lib/modules -name "*ip6t*" -delete
+          find "$TARGET_DIR"/lib/modules -name "*ipv6*" -delete
+          find "$TARGET_DIR"/lib/modules -name "ext4.ko" -delete
+          find "$TARGET_DIR"/lib/modules -name "fat.ko" -delete
+          find "$TARGET_DIR"/lib/modules -name "vfat.ko" -delete
+          find "$TARGET_DIR"/lib/modules -name "ntfs*.ko" -delete
+          find "$TARGET_DIR"/lib/modules -name "nls_*.ko" -delete
+          
+          # 3. Очистка тяжелых тем и файлов перевода интерфейса (оставляем только английский)
+          rm -rf "$TARGET_DIR"/www/luci-static/argon 2>/dev/null
+          rm -rf "$TARGET_DIR"/www/luci-static/design 2>/dev/null
+          rm -rf "$TARGET_DIR"/usr/lib/lua/luci/i18n/* 2>/dev/null
+          
+          # 4. Удаление статических баз гео-роутинга
           rm -rf "$TARGET_DIR"/usr/share/v2ray/* 2>/dev/null
           rm -rf "$TARGET_DIR"/usr/share/sing-box/* 2>/dev/null
           rm -rf "$TARGET_DIR"/usr/share/xray/* 2>/dev/null
           rm -rf "$TARGET_DIR"/etc/homeproxy/resources/* 2>/dev/null
-          
-          # Удаление баз OPKG
-          rm -rf "$TARGET_DIR"/usr/lib/opkg/info/* 2>/dev/null
-          rm -rf "$TARGET_DIR"/usr/lib/opkg/lists/* 2>/dev/null
-          rm -f "$TARGET_DIR"/usr/bin/opkg 2>/dev/null
-          
-          # Удаление ВСЕХ файлов перевода интерфейса (экономия > 1 МБ)
-          rm -rf "$TARGET_DIR"/usr/lib/lua/luci/i18n/* 2>/dev/null
-          
-          # Удаление возможных дубликатов бинарника
-          rm -f "$TARGET_DIR"/usr/sbin/sing-box 2>/dev/null
-          rm -f "$TARGET_DIR"/usr/bin/iperf3 2>/dev/null
-          
           mkdir -p "$TARGET_DIR"/usr/share/sing-box
           touch "$TARGET_DIR"/usr/share/sing-box/geoip.srs
           touch "$TARGET_DIR"/usr/share/sing-box/geosite.srs
@@ -112,8 +120,8 @@ jobs:
       - name: Build Firmware with base OS reduction
         run: |
           cd builder
-          # Добавлено исключение ядерных модулей IPv6 и вспомогательных утилит
-          EXCLUDE_PKGS="-luci-theme-argon -luci-app-ttyd -ttyd -luci-app-upnp -miniupnpd -luci-app-samba4 -samba4-server -luci-app-filetransfer -luci-app-ramfree -luci-app-autoreboot -automount -kmod-fs-ext4 -kmod-fs-vfat -kmod-fs-exfat -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -kmod-usb-storage -kmod-usb-storage-extras -kmod-scsi-core -luci-proto-ipv6 -ipv6helper -odhcp6c -kmod-ip6tables -ip6tables -kmod-nf-ipt6 -kmod-nf-conntrack6 -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -kmod-sound-core -kmod-usb-dwc3 -wpad-openssl -wpad-basic-openssl -luci-i18n-base-zh-cn -luci-i18n-homeproxy-zh-cn"
+          # Максимально расширенный список исключений пакетов
+          EXCLUDE_PKGS="-block-mount -blkid -kmod-fs-ext4 -kmod-fs-vfat -kmod-fs-exfat -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -kmod-usb-storage -kmod-usb-storage-extras -kmod-scsi-core -luci-proto-ipv6 -ipv6helper -odhcp6c -kmod-ipv6 -kmod-ip6tables -ip6tables -kmod-nf-ipt6 -kmod-nf-conntrack6 -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -wpad-openssl -wpad-basic-openssl -luci-i18n-base-zh-cn -luci-i18n-homeproxy-zh-cn -luci-theme-argon -luci-app-ttyd -ttyd -luci-app-upnp -miniupnpd -luci-app-samba4 -samba4-server -luci-app-filetransfer -luci-app-ramfree -luci-app-autoreboot -automount -tcpdump -htop -coremark -kmod-sound-core -kmod-usb-dwc3 -luci-app-nlbwmon -nlbwmon -luci-app-zerotier -zerotier -luci-app-sqm -sqm-scripts -luci-app-bbr -kmod-tcp-bbr -luci-app-ddns -ddns-scripts -luci-app-wol -etherwake"
           
           INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-basic-mbedtls"
           
