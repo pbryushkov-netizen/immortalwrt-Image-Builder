@@ -108,13 +108,14 @@ jobs:
           return m
           EOF
 
-          # Функция скачивания с ключом -k (insecure) для обхода проблем с датой и временем
+          # Скрипт с правильными ссылками на специализированный RU-репозиторий
           cat << 'EOF' > builder/files/usr/bin/vpn-runner.sh
           #!/bin/sh
           download() {
               FILE=$1
               URL=$2
               logger -t "VPN" "Downloading $FILE..."
+              rm -f "$FILE"
               curl -sfLk -4 --connect-timeout 15 -o "$FILE" "$URL" || \
               curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://mirror.ghproxy.com/$URL" || \
               curl -sfLk -4 --connect-timeout 15 -o "$FILE" "https://ghp.ci/$URL"
@@ -129,8 +130,8 @@ jobs:
           fi
           
           mkdir -p /tmp/geo
-          [ -s /tmp/geo/geoip-ru.srs ] || download "/tmp/geo/geoip-ru.srs" "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip-ru.srs"
-          [ -s /tmp/geo/geosite-ru.srs ] || download "/tmp/geo/geosite-ru.srs" "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite-ru.srs"
+          [ -s /tmp/geo/geoip-ru.srs ] || download "/tmp/geo/geoip-ru.srs" "https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geoip.srs"
+          [ -s /tmp/geo/geosite-ru.srs ] || download "/tmp/geo/geosite-ru.srs" "https://github.com/savely-krasovsky/ru-routing/releases/latest/download/geosite.srs"
           
           if [ ! -s /tmp/geo/geoip-ru.srs ]; then
               logger -t "VPN" "Error: Failed to download GeoIP databases"
