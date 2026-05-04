@@ -8,8 +8,6 @@ env:
   PROFILE: cudy_wr3000-v1
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  # ВНИМАНИЕ: Мы удалили sing-box из списка пакетов репозитория!
-  # Мы будем внедрять его вручную через папку files/ после UPX-сжатия.
   PACKAGES: -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl -kmod-nft-offload -kmod-tcp-bbr
   DOWNLOAD_URL: https://downloads.immortalwrt.org/releases/24.10.5/targets/mediatek/filogic/immortalwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
   TZ: Europe/Moscow
@@ -27,7 +25,6 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
-        # Добавили upx-ucl для сжатия бинарника
         sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd upx-ucl
 
     - name: Download and extract Image Builder
@@ -45,22 +42,17 @@ jobs:
     - name: Inject UPX-compressed Sing-Box
       run: |
         cd /tmp
-        # Качаем официальный бинарник 1.12.0, в котором точно есть with_xhttp
         wget -qO sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.12.0/sing-box-1.12.0-linux-arm64.tar.gz
         tar -xzf sing-box.tar.gz
-        
-        # Жмем бинарник алгоритмом UPX на максималках
         upx --best sing-box-1.12.0-linux-arm64/sing-box
         
-        # Создаем файловую структуру для прошивки
-        mkdir -p ${{ env.ROOT_DIRECTORY }}/files/usr/bin
-        cp sing-box-1.12.0-linux-arm64/sing-box ${{ env.ROOT_DIRECTORY }}/files/usr/bin/
-        chmod +x ${{ env.ROOT_DIRECTORY }}/files/usr/bin/sing-box
+        sudo mkdir -p ${{ env.ROOT_DIRECTORY }}/files/usr/bin
+        sudo cp sing-box-1.12.0-linux-arm64/sing-box ${{ env.ROOT_DIRECTORY }}/files/usr/bin/
+        sudo chmod +x ${{ env.ROOT_DIRECTORY }}/files/usr/bin/sing-box
 
     - name: Compile firmware
       run: |
         cd ${{ env.ROOT_DIRECTORY }}
-        # Компилируем прошивку, передавая папку files/
         sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}" FILES="files"
         
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
