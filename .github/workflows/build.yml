@@ -35,9 +35,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y zstd git
 
+          # Клонируем в sb-src чтобы имя директории не конфликтовало с бинарником sing-box
           git clone --depth=1 --branch v1.10.7 \
-            https://github.com/SagerNet/sing-box.git sing-box
-          cd sing-box
+            https://github.com/SagerNet/sing-box.git sb-src
+          cd sb-src
 
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
           go build -trimpath \
@@ -46,6 +47,7 @@ jobs:
             -o ../sing-box ./cmd/sing-box
           cd ..
           ls -lh sing-box
+          file sing-box
 
       # ── 3. Публикуем бинарник как GitHub Release ─────────────────────────
       #   Роутер скачает его при первом старте в /tmp (256 МБ RAM, не Flash!)
