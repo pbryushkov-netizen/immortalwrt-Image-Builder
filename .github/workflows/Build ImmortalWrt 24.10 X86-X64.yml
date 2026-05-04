@@ -8,10 +8,9 @@ env:
   PROFILE: cudy_wr3000-v1
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  # МАКСИМАЛЬНО ЖЕСТКАЯ ЭКОНОМИЯ МЕСТА:
-  # Убираем luci-app-sing-box, оставляем только сам бинарник
-  # Вырезаем поддержку USB, звука и лишних протоколов Wi-Fi
-  PACKAGES: "sing-box -luci-app-sing-box -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl -kmod-nft-offload -kmod-tcp-bbr"
+  # Строгий список пакетов для экономии 16 МБ Flash-памяти
+  # Добавляем ядро sing-box, удаляем графический интерфейс и неиспользуемые драйверы
+  PACKAGES: sing-box -luci-app-sing-box -kmod-usb-core -kmod-usb3 -kmod-usb-dwc3 -kmod-sound-core -wpad-basic-mbedtls wpad-mesh-wolfssl -kmod-nft-offload -kmod-tcp-bbr
   DOWNLOAD_URL: https://downloads.immortalwrt.org/releases/24.10.5/targets/mediatek/filogic/immortalwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.zst
   TZ: Europe/Moscow
 
@@ -23,39 +22,38 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Initialization environment
+    - name: Initialize environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd
+        sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 zstd
 
     - name: Download and extract Image Builder
       run: |
-        # Скачиваем
+        # Загрузка и принудительная последовательная распаковка архива zst
         wget -qO /tmp/imagebuilder.tar.zst $DOWNLOAD_URL
-        # Распаковываем через zstd явно
         zstd -d /tmp/imagebuilder.tar.zst -o /tmp/imagebuilder.tar
-        sudo tar -xvf /tmp/imagebuilder.tar -C /tmp
-        # Чистим временные архивы сразу
+        sudo tar -xf /tmp/imagebuilder.tar -C /tmp
+        # Очистка исходных архивов для экономии места
         rm /tmp/imagebuilder.tar /tmp/imagebuilder.tar.zst
 
     - name: Set Image Builder root directory
       run: |
         ROOT_DIR=$(find /tmp -maxdepth 1 -type d -name "immortalwrt-imagebuilder-*")
         echo "ROOT_DIRECTORY=$ROOT_DIR" >> $GITHUB_ENV
-    continue-on-error: 
-    
+
     - name: Compile firmware
       run: |
         cd ${{ env.ROOT_DIRECTORY }}
-        # Пытаемся собрать. Если упадет по месту - мы увидим это в логе
-        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}" || { echo "BUILD_FAILED=true" >> $GITHUB_ENV; exit 1; }
+        # Компиляция образа
+        sudo make image PROFILE=${{ env.PROFILE }} PACKAGES="${{ env.PACKAGES }}"
         
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         sudo mkdir -p /tmp/bin_firmware
-        cp bin/targets/mediatek/filogic/*.bin /tmp/bin_firmware/ || true
-        cp bin/targets/mediatek/filogic/*.manifest /tmp/bin_firmware/ || true
+        # Поиск и копирование сгенерированных bin файлов в директорию выгрузки
+        sudo find bin/targets/ -type f -name "*.bin" -exec cp {} /tmp/bin_firmware/ \;
+        sudo find bin/targets/ -type f -name "*.manifest" -exec cp {} /tmp/bin_firmware/ \;
 
     - name: Organize files
       id: organize
@@ -63,8 +61,7 @@ jobs:
       run: |
         cd /tmp/bin_firmware
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-        
+
     - name: Upload firmware to Artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -76,8 +73,7 @@ jobs:
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=Cudy-WR3000-v1-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        echo "Custom ImmortalWrt for Cudy WR3000 v1" > release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
+        echo "Custom ImmortalWrt for Cudy WR3000 v1 with sing-box core" > release.txt
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
