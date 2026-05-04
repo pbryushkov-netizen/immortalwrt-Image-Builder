@@ -1,3 +1,5 @@
 #!/bin/sh
 /etc/init.d/vpn enable
+# Сбрасываем кеш LuCI чтобы новый контроллер vpn.lua был обнаружен
+rm -f /tmp/luci-indexcache /tmp/luci-modulecache /tmp/.luci-*
 rm -f /etc/uci-defaults/99-vpn-enable

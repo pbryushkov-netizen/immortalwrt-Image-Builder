@@ -112,7 +112,7 @@ jobs:
           # Роутер используется как прокси-сервер между провайдером и mesh-сетью.
           # WiFi полностью отключён — экономим ~4 МБ Flash.
           PACKAGES="
-            luci luci-theme-bootstrap
+            luci luci-compat luci-theme-bootstrap
             kmod-tun ip-full
             curl ca-bundle
             -wpad-basic-mbedtls -wpad-mini -hostapd -hostapd-common
