@@ -1,4 +1,4 @@
-name: Build Custom OpenWrt 23.05 with Micro VLESS GUI
+name: Build Custom OpenWrt 24.10.5 with Micro VLESS GUI
 
 on:
   workflow_dispatch:
@@ -32,11 +32,16 @@ jobs:
           
           upx --best --lzma sing-box-custom
 
-      - name: Setup Vanilla OpenWrt 23.05 ImageBuilder
+      - name: Setup Vanilla OpenWrt 24.10.5 ImageBuilder
         run: |
-          wget https://downloads.openwrt.org/releases/23.05.4/targets/mediatek/filogic/openwrt-imagebuilder-23.05.4-mediatek-filogic.Linux-x86_64.tar.xz
+          wget https://downloads.openwrt.org/releases/24.10.5/targets/mediatek/filogic/openwrt-imagebuilder-24.10.5-mediatek-filogic.Linux-x86_64.tar.xz
           tar -xf openwrt-imagebuilder-*.tar.xz
           mv openwrt-imagebuilder-*/ builder
+
+      - name: Patch SquashFS compression in .config
+        run: |
+          cd builder
+          sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
 
       - name: Inject Micro LuCI GUI and Sing-box Engine
         run: |
@@ -47,7 +52,7 @@ jobs:
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
           
-          # Установка ядра VPN
+          # Интеграция сжатого ядра VPN
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
@@ -63,7 +68,7 @@ jobs:
               option sid ''
           EOF
 
-          # 2. Интеграция в меню LuCI
+          # 2. Интеграция в меню веб-интерфейса LuCI
           cat << 'EOF' > builder/files/usr/lib/lua/luci/controller/vless.lua
           module("luci.controller.vless", package.seeall)
           function index()
@@ -72,7 +77,7 @@ jobs:
           end
           EOF
 
-          # 3. Создание визуальной формы ввода ключей
+          # 3. Создание визуальной формы ввода ключей (без HTML, только логика Lua)
           cat << 'EOF' > builder/files/usr/lib/lua/luci/model/cbi/vless.lua
           m = Map("vless", "VLESS+xhttp Reality", "Ультра-компактный клиент Sing-Box. Базы маршрутизации загружаются в RAM автоматически.")
           s = m:section(NamedSection, "main", "server", "Настройки сервера")
@@ -87,7 +92,7 @@ jobs:
           return m
           EOF
 
-          # 4. Демон: генерация JSON, загрузка баз и автозапуск
+          # 4. Системный демон маршрутизации и автозапуска
           cat << 'EOF' > builder/files/etc/init.d/vless
           #!/bin/sh /etc/rc.common
           START=99
@@ -156,7 +161,7 @@ jobs:
           EOF
           chmod +x builder/files/etc/init.d/vless
 
-          # Автоактивация службы
+          # Скрипт активации демона после прошивки
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-vless
           #!/bin/sh
           /etc/init.d/vless enable
@@ -164,13 +169,13 @@ jobs:
           EOF
           chmod +x builder/files/etc/uci-defaults/99-enable-vless
 
-      - name: Build Firmware with custom UI
+      - name: Build Firmware with OpenWrt 24.10.5 baseline
         run: |
           cd builder
-          sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
-          
-          # Оставляем минимальный джентльменский набор
+          # Исключение тяжелых модулей IPv6 и USB
           EXCLUDE_PKGS="-odhcp6c -kmod-ipv6 -luci-proto-ipv6 -kmod-usb-core -kmod-usb3 -ppp -ppp-mod-pppoe"
+          
+          # Установка базового веб-интерфейса и сертификатов
           INCLUDE_PKGS="luci luci-base luci-theme-bootstrap wpad-basic-mbedtls ca-bundle"
           
           make image PROFILE="cudy_wr3000-v1" PACKAGES="$INCLUDE_PKGS $EXCLUDE_PKGS" FILES="files"
@@ -178,5 +183,5 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Cudy-WR3000-v1-MicroVLESS
+          name: Cudy-WR3000-v1-OpenWrt-24.10.5-MicroVLESS
           path: builder/bin/targets/mediatek/filogic/*-sysupgrade.bin
