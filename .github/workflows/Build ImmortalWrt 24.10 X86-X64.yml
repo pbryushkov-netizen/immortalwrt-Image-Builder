@@ -15,12 +15,15 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build custom minimal Sing-box
+      - name: Build custom minimal Sing-box and compress with UPX
         run: |
+          # Установка архиватора UPX
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl
+          
+          # Клонирование и сборка Sing-box
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
-          # Экстремальная оптимизация бинарника. Отключаем всё лишнее через теги сборки.
-          # Оставляем только VLESS, Reality, xhttp (через стандартные транспорты) и uTLS.
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=arm64
@@ -28,7 +31,14 @@ jobs:
             -tags "with_vless,with_utls,with_reality,with_clash_api" \
             -o ../sing-box-custom ./cmd/sing-box
           cd ..
-          echo "Размер кастомного ядра Sing-box:"
+          
+          echo "Размер бинарника ДО сжатия:"
+          ls -lh sing-box-custom
+          
+          # Экстремальное сжатие бинарного файла
+          upx --best --lzma sing-box-custom
+          
+          echo "Размер бинарника ПОСЛЕ сжатия UPX:"
           ls -lh sing-box-custom
 
       - name: Setup ImmortalWrt ImageBuilder (MT7981)
@@ -37,10 +47,12 @@ jobs:
           tar -xf immortalwrt-imagebuilder-*.tar.xz
           mv immortalwrt-imagebuilder-*/ builder
 
-      - name: Patch SquashFS compression block size
+      - name: Patch SquashFS compression in .config
         run: |
-          # Увеличиваем размер блока словаря xz с дефолтных 256k до 1024k для экстремального сжатия
-          sed -i 's/-b 256k/-b 1024k/g' builder/include/image.mk
+          cd builder
+          # Увеличение размера блока для максимального сжатия файловой системы
+          sed -i 's/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256/CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=1024/g' .config
+          sed -i 's/CONFIG_TARGET_IMAGES_GZIP=y/# CONFIG_TARGET_IMAGES_GZIP is not set/g' .config
 
       - name: Inject custom Sing-box and RAM-based GeoIP Script
         run: |
@@ -48,11 +60,11 @@ jobs:
           mkdir -p builder/files/etc/init.d/
           mkdir -p builder/files/etc/uci-defaults/
           
-          # 1. Подмена ядра (ImageBuilder перезапишет бинарник из пакета нашим)
+          # Интеграция сжатого ядра
           cp sing-box-custom builder/files/usr/bin/sing-box
           chmod +x builder/files/usr/bin/sing-box
 
-          # 2. Скрипт для скачивания баз маршрутизации в RAM (/tmp) при старте
+          # Скрипт загрузки баз маршрутизации в RAM
           cat << 'EOF' > builder/files/etc/init.d/geo-ram-loader
           #!/bin/sh /etc/rc.common
           START=99
@@ -67,7 +79,7 @@ jobs:
           EOF
           chmod +x builder/files/etc/init.d/geo-ram-loader
 
-          # 3. Автоматическое включение скрипта при первой загрузке
+          # Активация скрипта
           cat << 'EOF' > builder/files/etc/uci-defaults/99-enable-geo-ram
           #!/bin/sh
           /etc/init.d/geo-ram-loader enable
@@ -79,7 +91,6 @@ jobs:
       - name: Build Firmware with aggressive package reduction
         run: |
           cd builder
-          # Пакеты со знаком "-" будут вырезаны из базовой прошивки
           EXCLUDE_PKGS="-luci-theme-argon -kmod-usb-core -kmod-usb3 -kmod-usb2 -kmod-usb-net -luci-proto-ipv6 -ipv6helper -odhcp6c -ppp -ppp-mod-pppoe -kmod-ppp -kmod-pppoe -kmod-pppox -kmod-slhc -tcpdump -htop -coremark -wpad-basic-mbedtls -kmod-sound-core -kmod-usb-dwc3"
           INCLUDE_PKGS="luci-app-homeproxy luci-theme-bootstrap wpad-openssl curl"
           
