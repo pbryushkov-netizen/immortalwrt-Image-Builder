@@ -30,19 +30,31 @@ jobs:
           go-version: '1.23'
           cache: false
 
+      - name: Get latest sing-box version
+        id: sbox_ver
+        run: |
+          VER=$(curl -sfL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" \
+            | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"v//;s/"//')
+          # Fallback to a known-good version that supports xhttp transport
+          VER="${VER:-1.11.0}"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Using sing-box v${VER}"
+
       - name: Build minimal sing-box (arm64)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y zstd git
 
+          VER="${{ steps.sbox_ver.outputs.ver }}"
+
           # Клонируем в sb-src чтобы имя директории не конфликтовало с бинарником sing-box
-          git clone --depth=1 --branch v1.13.11 \
+          git clone --depth=1 --branch "v${VER}" \
             https://github.com/SagerNet/sing-box.git sb-src
           cd sb-src
 
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
           go build -trimpath \
-            -ldflags "-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.13.11" \
+            -ldflags "-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=${VER}" \
             -tags "with_vless,with_utls,with_reality,with_xhttp" \
             -o ../sing-box ./cmd/sing-box
           cd ..
@@ -55,12 +67,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VER="${{ steps.sbox_ver.outputs.ver }}"
           # Удаляем старый релиз и тег (по отдельности — надёжнее)
           gh release delete vpn-core -y 2>/dev/null || true
           git push origin :refs/tags/vpn-core 2>/dev/null || true
           sleep 3
           gh release create vpn-core sing-box \
-            --title "VPN Core (ARM64 sing-box v1.10.7)" \
+            --title "VPN Core (ARM64 sing-box v${VER})" \
             --notes "Автоматическая сборка. Скачивается роутером в /tmp при старте." \
             --latest=false
 
