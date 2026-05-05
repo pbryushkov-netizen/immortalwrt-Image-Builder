@@ -1,4 +1,4 @@
-name: Build OpenWrt 24.10.6 — Cudy WR3000 v1 — Smart VLESS
+name: Build OpenWrt 25.12.2 — Cudy WR3000 v1 — Smart VLESS
 
 on:
   workflow_dispatch:
@@ -77,13 +77,13 @@ jobs:
             --notes "Автоматическая сборка. Скачивается роутером в /tmp при старте." \
             --latest=false
 
-      # ── 4. Скачиваем OpenWrt 24.10.6 Image Builder ───────────────────────
-      - name: Download OpenWrt 24.10.6 Image Builder
+      # ── 4. Скачиваем OpenWrt 25.12.2 Image Builder ───────────────────────
+      - name: Download OpenWrt 25.12.2 Image Builder
         run: |
-          IB_URL="https://downloads.openwrt.org/releases/24.10.6/targets/mediatek/filogic/openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst"
+          IB_URL="https://downloads.openwrt.org/releases/25.12.2/targets/mediatek/filogic/openwrt-imagebuilder-25.12.2-mediatek-filogic.Linux-x86_64.tar.zst"
           wget -q "$IB_URL"
-          tar -xf openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64.tar.zst
-          mv openwrt-imagebuilder-24.10.6-mediatek-filogic.Linux-x86_64 builder
+          tar -xf openwrt-imagebuilder-25.12.2-mediatek-filogic.Linux-x86_64.tar.zst
+          mv openwrt-imagebuilder-25.12.2-mediatek-filogic.Linux-x86_64 builder
 
       # ── 5. Максимальное сжатие SquashFS ──────────────────────────────────
       - name: Enable maximum SquashFS compression
