@@ -23,7 +23,7 @@ dl_sbox() {
         rm -f "$SBOX"
         curl -sfL --connect-timeout 20 --max-time 180 \
             -o "$SBOX" "${MIRROR}${CUSTOM_URL}" 2>/dev/null
-        SZ=$(wc -c < "$SBOX" 2>/dev/null || echo 0)
+        SZ=$([ -f "$SBOX" ] && wc -c < "$SBOX" 2>/dev/null || echo 0)
         if [ "$SZ" -ge "$SBOX_MIN_SIZE" ]; then
             chmod +x "$SBOX"
             return 0
@@ -39,7 +39,7 @@ dl_sbox() {
         rm -f "$TARBALL"
         curl -sfL --connect-timeout 20 --max-time 180 \
             -o "$TARBALL" "${MIRROR}${SB_URL}" 2>/dev/null
-        SZ=$(wc -c < "$TARBALL" 2>/dev/null || echo 0)
+        SZ=$([ -f "$TARBALL" ] && wc -c < "$TARBALL" 2>/dev/null || echo 0)
         if [ "$SZ" -ge "$SBOX_MIN_SIZE" ]; then
             rm -rf /tmp/sb_ext
             mkdir -p /tmp/sb_ext
@@ -76,12 +76,20 @@ launch_singbox() {
     if ! "$SBOX" check -c "$cfg" >/dev/null 2>&1; then
         local ERRMSG
         ERRMSG=$("$SBOX" check -c "$cfg" 2>&1 | head -1)
-        if echo "$ERRMSG" | grep -q "xhttp"; then
+        if echo "$ERRMSG" | grep -q "xhttp\|splithttp"; then
             log "xhttp unsupported in this sing-box build — retrying with splithttp..."
             sed 's/"type":"xhttp"/"type":"splithttp"/g' "$cfg" > "${cfg}.tmp" \
                 && mv "${cfg}.tmp" "$cfg"
             if ! "$SBOX" check -c "$cfg" >/dev/null 2>&1; then
-                log "Config validation failed: $("$SBOX" check -c "$cfg" 2>&1 | head -1)"
+                local ERR2
+                ERR2=$("$SBOX" check -c "$cfg" 2>&1 | head -1)
+                log "Config validation failed: $ERR2"
+                # Binary supports neither xhttp nor splithttp — it is outdated.
+                # Remove it so the next restart re-downloads the current release.
+                if echo "$ERR2" | grep -q "unknown transport type"; then
+                    log "Outdated binary detected — removing for re-download on next start"
+                    rm -f "$SBOX"
+                fi
                 return 1
             fi
         else
@@ -175,7 +183,7 @@ wait_net || exit 1
 
 # Download sing-box binary if missing or suspiciously small (HTML 404 guard)
 SBOX_SZ=0
-[ -f "$SBOX" ] && SBOX_SZ=$(wc -c < "$SBOX" 2>/dev/null || echo 0)
+[ -f "$SBOX" ] && SBOX_SZ=$([ -f "$SBOX" ] && wc -c < "$SBOX" 2>/dev/null || echo 0)
 if [ ! -x "$SBOX" ] || [ "$SBOX_SZ" -lt "$SBOX_MIN_SIZE" ]; then
     log "Downloading sing-box binary to RAM..."
     if ! dl_sbox; then
@@ -202,8 +210,33 @@ if [ -n "$SUB_URL" ]; then
     vpn-subscription.sh
 fi
 
-# If subscription provided a full JSON config, validate and use it directly.
+# Patch subscription JSON config if it uses the old sing-box dns.servers format
+# (array of plain strings → array of {"address":"..."} objects required in 1.10+)
+# Uses Lua which is always available on OpenWrt (LuCI dependency).
+patch_sub_dns() {
+    lua << 'LUAEOF' 2>/dev/null
+local file = "/tmp/sing-box-sub.json"
+local fh = io.open(file, "r")
+if not fh then os.exit(1) end
+local s = fh:read("*a")
+fh:close()
+-- Convert dns.servers ["ip",...] → [{"address":"ip"},...]
+-- Only patches entries that are bare strings (no { already present)
+s = s:gsub('"servers"%s*:%s*%[(.-)%]', function(arr)
+    if arr:find('{') then
+        return '"servers":[' .. arr .. ']'
+    end
+    local patched = arr:gsub('"([^"]+)"', '{"address":"%1"}')
+    return '"servers":[' .. patched .. ']'
+end)
+local wh = io.open(file, "w")
+if wh then wh:write(s); wh:close() end
+LUAEOF
+}
+
+# If subscription provided a full JSON config, patch its DNS format and use it directly.
 if [ -f "$SUB_CONFIG" ]; then
+    patch_sub_dns
     log "Validating subscription JSON config..."
     if launch_singbox "$SUB_CONFIG"; then
         exit 0   # unreachable after successful exec
