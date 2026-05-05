@@ -1,6 +1,7 @@
 config vpn 'settings'
 	option enabled '0'
 	option subscription_url ''
+	option active_server ''
 
 config server 'main'
 	option alias 'My Server'
